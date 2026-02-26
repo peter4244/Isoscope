@@ -1,0 +1,29 @@
+column_name	type	description	example
+isoform_id	character	Transcript ID (GENCODE ENST or PacBio PB format)	ENST00000911530.1
+isoform_name	character	Human-readable transcript name (GENCODE name or PB ID)	MTCL1-203
+source	character	Annotation source: GENCODE or SQANTI	GENCODE
+chromosome	character	Chromosome	18
+strand	character	Genomic strand (+ or -)	-
+tss	integer	Transcription start site (strand-aware genomic coordinate)	8735389
+tes	integer	Transcription end site (strand-aware genomic coordinate)	8674677
+transcript_length	integer	Total transcript length in nucleotides (genomic span)	60713
+n_exons	integer	Number of exons	36
+exons	character	Semicolon-delimited exon coordinates with CDS/UTR annotations (format: start_end_strand:type)	8674677_8674899_-:3UTR;8675008_8675160_-:3UTR
+junctions	character	Semicolon-delimited splice junction coordinates (format: donor_acceptor_strand)	8674899_8675008_-;8675160_8677814_-
+cds_start	integer	Genomic start of CDS region (always smaller coordinate)	8677840
+cds_end	integer	Genomic end of CDS region (always larger coordinate)	8735255
+cds_length_nt	integer	CDS length in nucleotides	5826
+cds_length_aa	integer	CDS length in amino acids (floor of cds_length_nt / 3)	1942
+in_frame	integer	CDS divisible by 3: 1 = yes (in-frame), 0 = no (out-of-frame), NA = no CDS	1
+utr5_length	integer	5-prime UTR length in nucleotides (strand-aware)	134
+utr3_length	integer	3-prime UTR length in nucleotides (strand-aware)	3163
+is_protein_coding	logical	Whether isoform is protein-coding (from biotype or CDS presence)	TRUE
+coding_source	character	How coding status was determined: GENCODE_biotype, GENCODE_CDS, or SQANTI	GENCODE_biotype
+expr_DMSO_{ct}	numeric	Mean TMM-normalized CPM in DMSO samples for cell type (ddali, dd, doali, at2, fb, mv)	12.5
+total_reads_DMSO_{ct}	integer	Sum of raw read counts in DMSO samples for cell type	347
+expr_Smg1i_{ct}	numeric	Mean TMM-normalized CPM in Smg1i samples for cell type	15.3
+total_reads_Smg1i_{ct}	integer	Sum of raw read counts in Smg1i samples for cell type	412
+total_reads_all_samples	integer	Sum of raw read counts across all samples and conditions	1523
+frame_matches_uniprot	logical	Translated CDS protein is a perfect match or perfect subset of UniProt canonical protein sequence (requires --protein flag; NA if not protein-coding or translation failed)	TRUE
+match_pct_uniprot	numeric	Percentage of 20-aa sliding windows in the translated protein that are found verbatim in the UniProt canonical sequence (requires --protein flag; NA if not protein-coding or translation failed)	93.4
+matched_range_uniprot	character	UniProt amino acid range of the longest contiguous stretch of identical sequence between the translated isoform protein and the UniProt canonical (format: start-end; requires --protein flag)	781-1893

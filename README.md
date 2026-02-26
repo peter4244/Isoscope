@@ -1,6 +1,8 @@
-# Gene Isoform Annotation Pipeline
+# lr_igv_from_bam
 
-Extract comprehensive isoform-level annotations for genes in the NMD (Nonsense-Mediated Decay) study, combining GENCODE reference annotations with SQANTI PacBio long-read isoforms.
+Extract comprehensive isoform-level annotations for any gene, combining GENCODE reference annotations with SQANTI PacBio long-read isoforms. Includes tools for extracting gene regions from genome-aligned BAMs and generating IGV sessions and sashimi plots.
+
+Developed for the NMD (Nonsense-Mediated Decay) lung cell line study but works with any GENCODE + SQANTI + PacBio dataset.
 
 ---
 
@@ -8,7 +10,7 @@ Extract comprehensive isoform-level annotations for genes in the NMD (Nonsense-M
 
 ```bash
 # 1. Clone the repo
-git clone <repo-url> && cd mtcl1
+git clone https://github.com/repjc/lr_igv_from_bam.git && cd lr_igv_from_bam
 
 # 2. Create config files from templates and edit paths for your system
 cp config.example.R config.R    # edit paths — used by gene_isoform_annotation.R
@@ -751,9 +753,7 @@ This is normal:
 
 ### Overview
 
-In addition to the annotation pipeline, this directory includes tools for visualizing genome-aligned (hg38) PacBio long-read BAMs in IGV and as sashimi plots.
-
-The existing `igv/` directory contains **transcriptome-aligned** BAMs (reads mapped against individual transcript sequences). The `igv_genome/` directory contains **genome-aligned** BAMs (reads mapped to hg38), which show reads in genomic context with visible intron/exon structure and splice junctions.
+In addition to the annotation pipeline, this repo includes tools for visualizing genome-aligned (hg38) PacBio long-read BAMs in IGV and as sashimi plots. The `extract_gene_region.sh` script takes genome-aligned BAMs as input and produces small BAM slices with an IGV session file.
 
 ### extract_gene_region.sh
 
@@ -869,10 +869,15 @@ If you use this pipeline in your research, please cite:
 
 ## Version History
 
+- **v3.0** (2026-02-26)
+  - Standalone repository (`lr_igv_from_bam`) — no longer embedded in parent project
+  - Config-based paths: `config.R` and `config.sh` replace all hardcoded paths
+  - Template files (`config.example.R`, `config.example.sh`) for easy setup
+  - Removed legacy `gene_isoform_annotation_fast.R`
+
 - **v2.1** (2026-02-26)
   - Added `extract_gene_region.sh` for genome-aligned BAM extraction and IGV session generation
   - Added ggsashimi sashimi plot workflow (Docker-based, with intron shrinking)
-  - Genome visualization outputs in `igv_genome/` (separate from transcriptome-aligned `igv/`)
   - Expression-filtered annotation GTF for cleaner sashimi plot annotation panels
 
 - **v2.0** (2026-02-20)
@@ -912,4 +917,4 @@ For questions or issues:
 
 ## License
 
-This pipeline is part of the NMD research project. Please cite appropriately if used in publications.
+This pipeline was developed as part of the NMD research project. Please cite appropriately if used in publications.

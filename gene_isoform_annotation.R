@@ -29,6 +29,12 @@ ensure_pkg <- function(pkg, bioc = FALSE) {
     } else {
       install.packages(pkg, repos = "https://cloud.r-project.org")
     }
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      stop(paste0("ERROR: Failed to install '", pkg, "'. ",
+                   if (bioc) "Try manually: BiocManager::install('" else "Try manually: install.packages('",
+                   pkg, "')"),
+           call. = FALSE)
+    }
   }
 }
 

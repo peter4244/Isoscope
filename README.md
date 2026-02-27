@@ -49,10 +49,30 @@ Developed for the NMD (Nonsense-Mediated Decay) lung cell line study but works w
 - **RAM**: 8 GB minimum, 16 GB recommended
 - **Disk**: ~5 GB for reference files
 
-#### R (version >= 4.0)
+#### Option A: Conda Environment (Recommended)
+
+A self-contained conda environment bundles R, all R packages, and command-line tools so nothing needs to be compiled from source. This avoids compiler version issues common on HPC clusters.
+
+```bash
+# Set strict channel priority (avoids ABI conflicts between conda-forge and bioconda)
+conda config --set channel_priority strict
+
+# Create and activate the environment
+conda env create -f environment.yml
+conda activate lr_igv
+```
+
+After activation, all R packages, `tabix`, `bgzip`, and `samtools` are available — skip to [Configuration](#configuration).
+
+#### Option B: Manual Installation
+
+<details>
+<summary>Click to expand manual installation steps</summary>
+
+##### R (version >= 4.0)
 Install from https://cran.r-project.org/
 
-#### R Packages
+##### R Packages
 ```r
 # Install Bioconductor packages
 if (!require("BiocManager", quietly = TRUE))
@@ -73,11 +93,11 @@ install.packages(c(
 ))
 ```
 
-#### tabix and bgzip (part of htslib)
+##### tabix and bgzip (part of htslib)
 
 **Required for preprocessing and running the annotation pipeline.**
 
-**Via Conda** (recommended):
+**Via Conda:**
 ```bash
 conda install -c bioconda htslib
 ```
@@ -99,7 +119,7 @@ sudo apt-get install tabix
 which tabix && which bgzip && echo "Tools installed!" || echo "Need to install htslib"
 ```
 
-#### samtools
+##### samtools
 
 **Required for BAM visualization tools** (`extract_gene_region.sh`).
 
@@ -107,13 +127,18 @@ which tabix && which bgzip && echo "Tools installed!" || echo "Need to install h
 conda install -c bioconda samtools   # or: brew install samtools
 ```
 
+</details>
+
 ### Configuration
 
 ```bash
 # 1. Clone the repo
 git clone https://changit.bwh.harvard.edu/repjc/lr_igv_from_bam.git && cd lr_igv_from_bam
 
-# 2. Create config files from templates and edit paths for your system
+# 2. Activate the conda environment (if using Option A)
+conda activate lr_igv
+
+# 3. Create config files from templates and edit paths for your system
 cp config.example.R config.R    # edit paths — used by gene_isoform_annotation.R
 cp config.example.sh config.sh  # edit paths — used by preprocess_sqanti_tabix.sh
 ```
@@ -902,6 +927,11 @@ If you use this pipeline in your research, please cite:
 ---
 
 ## Version History
+
+- **v3.2** (2026-02-27)
+  - Added `environment.yml` for reproducible conda setup (R, all R packages, htslib, samtools)
+  - Removed `check_compiler()` from R script (irrelevant with conda binaries)
+  - README now offers two setup paths: conda environment (recommended) vs manual installation
 
 - **v3.1** (2026-02-27)
   - Reorganized README for usability: added Table of Contents, promoted BAM visualization to peer section, consolidated deep-dive material into Reference section, moved Prerequisites/Installation up into Setup

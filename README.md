@@ -111,7 +111,7 @@ conda install -c bioconda samtools   # or: brew install samtools
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/repjc/lr_igv_from_bam.git && cd lr_igv_from_bam
+git clone https://changit.bwh.harvard.edu/repjc/lr_igv_from_bam.git && cd lr_igv_from_bam
 
 # 2. Create config files from templates and edit paths for your system
 cp config.example.R config.R    # edit paths — used by gene_isoform_annotation.R

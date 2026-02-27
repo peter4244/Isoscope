@@ -529,6 +529,13 @@ bash extract_gene_region.sh --region chr18:8705271-8832780 \
 bash extract_gene_region.sh --region chr18:8705271-8832780 \
     --pad 10000 --bam-dir ../data/bams/genome_hg38/ \
     --output-dir ./igv_genome/
+
+# Merge BAMs by (cell_type, treatment) — ~12 tracks instead of 38
+bash extract_gene_region.sh --gene MTCL1 \
+    --gencode-gtf /path/to/gencode.v49.annotation.gtf.gz \
+    --bam-dir ../data/bams/genome_hg38/ \
+    --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf \
+    --merge-by-group
 ```
 
 **Options:**
@@ -543,6 +550,7 @@ bash extract_gene_region.sh --region chr18:8705271-8832780 \
 | `--gtf FILE` | Gene annotation GTF to include in IGV session |
 | `--gencode-gtf FILE` | Bgzipped GENCODE GTF for `--gene` lookup |
 | `--pad N` | Padding around region in bp (default: 5000) |
+| `--merge-by-group` | Merge extracted BAMs by (cell_type, treatment) group for cleaner IGV sessions |
 | `--display-mode MODE` | IGV display mode: SQUISHED, EXPANDED, COLLAPSED (default: SQUISHED) |
 
 **Features:**
@@ -562,6 +570,21 @@ runs/MTCL1/                                   # Default when using --gene MTCL1
 ├── Sample14_DD_017Q_Smg1i.aligned.bam.bai
 ├── gene_annotation.gtf                        # Copied from --gtf
 └── igv_session.xml                            # Open in IGV
+```
+
+With `--merge-by-group`, individual BAMs are merged by (cell_type, treatment):
+
+```
+runs/MTCL1/                                   # --merge-by-group output
+├── AT2_DMSO.aligned.bam                      # Merged: all AT2 DMSO donors
+├── AT2_DMSO.aligned.bam.bai
+├── AT2_Smg1i.aligned.bam                     # Merged: all AT2 Smg1i donors
+├── AT2_Smg1i.aligned.bam.bai
+├── DD_DMSO.aligned.bam
+├── DD_DMSO.aligned.bam.bai
+├── ...                                        # ~12 merged BAMs total
+├── gene_annotation.gtf
+└── igv_session.xml                            # Tracks labeled "DD DMSO (n=3)"
 ```
 
 ### Sashimi Plots with ggsashimi
@@ -970,6 +993,9 @@ If you use this pipeline in your research, please cite:
 ---
 
 ## Version History
+
+- **v3.4** (2026-02-27)
+  - Added `--merge-by-group` flag to `extract_gene_region.sh`: merges extracted BAMs by (cell_type, treatment) group for cleaner IGV sessions (~12 tracks instead of 38)
 
 - **v3.3** (2026-02-27)
   - Added `--output-dir` flag to both `gene_isoform_annotation.R` and `extract_gene_region.sh`

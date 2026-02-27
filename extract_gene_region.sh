@@ -29,6 +29,7 @@ OUTPUT_DIR=""
 GTF=""
 PAD=5000
 DISPLAY_MODE="SQUISHED"
+MERGE_BY_GROUP=false
 
 # ---- Usage ----
 usage() {
@@ -51,6 +52,7 @@ Options:
   --gencode-gtf FILE       Tabix-indexed or bgzipped GENCODE GTF for gene lookup
   --pad N                  Padding around region in bp (default: 5000)
   --display-mode MODE      IGV display mode: SQUISHED, EXPANDED, COLLAPSED (default: SQUISHED)
+  --merge-by-group         Merge extracted BAMs by (cell_type, treatment) group
   -h, --help               Show this help
 EOF
     exit "${1:-0}"
@@ -68,6 +70,7 @@ while [[ $# -gt 0 ]]; do
         --gtf)         GTF="$2"; shift 2 ;;
         --pad)         PAD="$2"; shift 2 ;;
         --display-mode) DISPLAY_MODE="$2"; shift 2 ;;
+        --merge-by-group) MERGE_BY_GROUP=true; shift ;;
         -h|--help)     usage 0 ;;
         *)             echo "ERROR: Unknown option: $1"; usage 1 ;;
     esac
@@ -236,6 +239,86 @@ if [[ ${#EMPTY_BAMS[@]} -gt 0 ]]; then
     echo "WARNING: ${#EMPTY_BAMS[@]} BAM(s) had 0 reads in the region: ${EMPTY_BAMS[*]}"
 fi
 
+# ---- Step 4b: Merge BAMs by group (cell_type × treatment) ----
+MERGED_DISPLAY_LINES=""
+if [[ "$MERGE_BY_GROUP" == true ]]; then
+    echo ""
+    echo "Merging BAMs by (cell_type, treatment) group..."
+
+    # Build group mapping: ct|treatment|bam_basename
+    GROUP_LINES=""
+    for bam_name in "${EXTRACTED_BAMS[@]}"; do
+        sample_id="${bam_name%.aligned.bam}"
+        sample_id="${sample_id%.bam}"
+        ct=""
+        treatment=""
+        if [[ "$sample_id" =~ ^Sample[0-9]+_(.+)_(DMSO|Smg1i)$ ]]; then
+            middle="${BASH_REMATCH[1]}"
+            treatment="${BASH_REMATCH[2]}"
+            donor="${middle##*_}"
+            ct="${middle%_${donor}}"
+        fi
+        if [[ -n "$ct" && -n "$treatment" ]]; then
+            GROUP_LINES="${GROUP_LINES}${ct}|${treatment}|${bam_name}
+"
+        else
+            echo "  WARNING: Could not parse sample name '${bam_name}', skipping merge for this file"
+        fi
+    done
+
+    # Sort by ct then treatment and extract unique groups
+    SORTED_GROUPS=$(echo "$GROUP_LINES" | sort -t'|' -k1,1 -k2,2)
+    UNIQUE_GROUPS=$(echo "$SORTED_GROUPS" | cut -d'|' -f1,2 | sort -u)
+
+    MERGED_BAMS=()
+    MERGED_DISPLAY_LINES=""
+
+    while IFS='|' read -r grp_ct grp_treat; do
+        [[ -z "$grp_ct" ]] && continue
+
+        # Collect BAMs belonging to this group
+        GRP_BAM_LIST=()
+        while IFS='|' read -r line_ct line_treat line_bam; do
+            if [[ "$line_ct" == "$grp_ct" && "$line_treat" == "$grp_treat" ]]; then
+                GRP_BAM_LIST+=("$line_bam")
+            fi
+        done <<< "$SORTED_GROUPS"
+
+        N=${#GRP_BAM_LIST[@]}
+        MERGED_NAME="${grp_ct}_${grp_treat}.aligned.bam"
+        DISPLAY_NAME="${grp_ct} ${grp_treat} (n=${N})"
+
+        if [[ $N -eq 1 ]]; then
+            # Single BAM — just rename
+            mv "${OUTPUT_DIR}/${GRP_BAM_LIST[0]}" "${OUTPUT_DIR}/${MERGED_NAME}"
+            mv "${OUTPUT_DIR}/${GRP_BAM_LIST[0]}.bai" "${OUTPUT_DIR}/${MERGED_NAME}.bai"
+            echo "  ${DISPLAY_NAME}: renamed ${GRP_BAM_LIST[0]}"
+        else
+            # Multiple BAMs — merge
+            MERGE_INPUTS=()
+            for b in "${GRP_BAM_LIST[@]}"; do
+                MERGE_INPUTS+=("${OUTPUT_DIR}/${b}")
+            done
+            samtools merge -c -f "${OUTPUT_DIR}/${MERGED_NAME}" "${MERGE_INPUTS[@]}"
+            samtools index "${OUTPUT_DIR}/${MERGED_NAME}"
+
+            # Remove individual BAMs
+            for b in "${GRP_BAM_LIST[@]}"; do
+                rm -f "${OUTPUT_DIR}/${b}" "${OUTPUT_DIR}/${b}.bai"
+            done
+            echo "  ${DISPLAY_NAME}: merged ${N} BAMs"
+        fi
+
+        MERGED_BAMS+=("$MERGED_NAME")
+        MERGED_DISPLAY_LINES="${MERGED_DISPLAY_LINES}${grp_ct}|${grp_treat}|${MERGED_NAME}|${DISPLAY_NAME}
+"
+    done <<< "$UNIQUE_GROUPS"
+
+    # Replace EXTRACTED_BAMS with merged BAMs
+    EXTRACTED_BAMS=("${MERGED_BAMS[@]}")
+    echo "Merged into ${#EXTRACTED_BAMS[@]} group(s)"
+fi
+
 # ---- Step 5: Copy GTF annotation if provided ----
 GTF_FILENAME=""
 if [[ -n "$GTF" ]]; then
@@ -258,38 +341,51 @@ IGV_LOCUS="${REGION_CHR}:${PADDED_START}-${PADDED_END}"
 SESSION_FILE="${OUTPUT_DIR}/igv_session.xml"
 
 # Build sorted BAM list with sort keys
-# Parse sample name: Sample{N}_{CT}_{DONOR}_{TREATMENT}.aligned.bam
-# Sort by: cell type, donor, treatment (DMSO < Smg1i)
-SORTED_BAMS=$(for bam_name in "${EXTRACTED_BAMS[@]}"; do
-    # Strip extensions to get sample ID
-    sample_id="${bam_name%.aligned.bam}"
-    sample_id="${sample_id%.bam}"
+if [[ "$MERGE_BY_GROUP" == true ]]; then
+    # Merged mode: use pre-computed merged BAM names + display names
+    # Sort by ct then treatment (DMSO < Smg1i)
+    SORTED_BAMS=$(echo "$MERGED_DISPLAY_LINES" | while IFS='|' read -r grp_ct grp_treat bam_name display_name; do
+        [[ -z "$grp_ct" ]] && continue
+        treat_order=2
+        if [[ "$grp_treat" == "DMSO" ]]; then treat_order=0; fi
+        if [[ "$grp_treat" == "Smg1i" ]]; then treat_order=1; fi
+        echo "${grp_ct}||${treat_order}|${bam_name}|${display_name}"
+    done | sort -t'|' -k1,1 -k3,3n)
+else
+    # Individual mode: parse sample names
+    # Parse sample name: Sample{N}_{CT}_{DONOR}_{TREATMENT}.aligned.bam
+    # Sort by: cell type, donor, treatment (DMSO < Smg1i)
+    SORTED_BAMS=$(for bam_name in "${EXTRACTED_BAMS[@]}"; do
+        # Strip extensions to get sample ID
+        sample_id="${bam_name%.aligned.bam}"
+        sample_id="${sample_id%.bam}"
 
-    # Extract components (Sample{N}_{CT}_{DONOR}_{TREATMENT})
-    # Handle names like Sample1_DD_ALI_001V_Smg1i (cell type with underscore)
-    ct=""
-    donor=""
-    treatment=""
-    display_name="$sample_id"
+        # Extract components (Sample{N}_{CT}_{DONOR}_{TREATMENT})
+        # Handle names like Sample1_DD_ALI_001V_Smg1i (cell type with underscore)
+        ct=""
+        donor=""
+        treatment=""
+        display_name="$sample_id"
 
-    # Try to parse the sample name
-    if [[ "$sample_id" =~ ^Sample[0-9]+_(.+)_(DMSO|Smg1i)$ ]]; then
-        middle="${BASH_REMATCH[1]}"
-        treatment="${BASH_REMATCH[2]}"
-        # middle is like "DD_017Q" or "DD_ALI_001V"
-        # donor is the last part (alphanumeric ID like 017Q, 001V)
-        donor="${middle##*_}"
-        ct="${middle%_${donor}}"
-        display_name="${ct}_${donor}_${treatment}"
-    fi
+        # Try to parse the sample name
+        if [[ "$sample_id" =~ ^Sample[0-9]+_(.+)_(DMSO|Smg1i)$ ]]; then
+            middle="${BASH_REMATCH[1]}"
+            treatment="${BASH_REMATCH[2]}"
+            # middle is like "DD_017Q" or "DD_ALI_001V"
+            # donor is the last part (alphanumeric ID like 017Q, 001V)
+            donor="${middle##*_}"
+            ct="${middle%_${donor}}"
+            display_name="${ct}_${donor}_${treatment}"
+        fi
 
-    # Sort key: ct, donor, treatment (DMSO=0, Smg1i=1)
-    treat_order=2
-    if [[ "$treatment" == "DMSO" ]]; then treat_order=0; fi
-    if [[ "$treatment" == "Smg1i" ]]; then treat_order=1; fi
+        # Sort key: ct, donor, treatment (DMSO=0, Smg1i=1)
+        treat_order=2
+        if [[ "$treatment" == "DMSO" ]]; then treat_order=0; fi
+        if [[ "$treatment" == "Smg1i" ]]; then treat_order=1; fi
 
-    echo "${ct}|${donor}|${treat_order}|${bam_name}|${display_name}"
-done | sort -t'|' -k1,1 -k2,2 -k3,3n)
+        echo "${ct}|${donor}|${treat_order}|${bam_name}|${display_name}"
+    done | sort -t'|' -k1,1 -k2,2 -k3,3n)
+fi
 
 # Write the XML
 {
@@ -336,7 +432,11 @@ echo ""
 echo "IGV session: ${SESSION_FILE}"
 echo "  Genome: hg38"
 echo "  Locus: ${IGV_LOCUS}"
-echo "  Tracks: ${#EXTRACTED_BAMS[@]} BAM(s)"
+if [[ "$MERGE_BY_GROUP" == true ]]; then
+    echo "  Tracks: ${#EXTRACTED_BAMS[@]} merged group(s)"
+else
+    echo "  Tracks: ${#EXTRACTED_BAMS[@]} BAM(s)"
+fi
 if [[ -n "$GTF_FILENAME" ]]; then
     echo "  Annotation: ${GTF_FILENAME}"
 fi

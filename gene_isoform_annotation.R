@@ -5,7 +5,7 @@
 # Features:
 # - Combines GENCODE reference annotations with SQANTI PacBio isoforms
 # - Detailed exon structures with CDS/UTR annotations
-# - DMSO-specific expression per cell type (from DGEList)
+# - Configurable expression stratification (from DGEList)
 # - Fast processing using grep pre-filtering and tabix indexing
 # - Optional GTF and FASTA outputs
 #
@@ -102,9 +102,6 @@ OUTPUT_TSV <- NULL
 OUTPUT_GTF_FILE <- NULL
 OUTPUT_FASTA_FILE <- NULL
 OUTPUT_PROTEIN_FILE <- NULL
-
-# Cell types for expression data
-CELL_TYPES <- c("DD_ALI", "DD", "DO_ALI", "AT2", "FB", "MV")
 
 # =============================================================================
 # HELPER FUNCTIONS FOR GENCODE PARSING
@@ -770,7 +767,7 @@ if (nrow(sqanti_target) > 0) {
 message("")
 
 # =============================================================================
-# STEP 4: CALCULATE DMSO-SPECIFIC EXPRESSION (OPTIONAL)
+# STEP 4: CALCULATE EXPRESSION (OPTIONAL)
 # =============================================================================
 
 # Combine GENCODE and SQANTI results
@@ -778,7 +775,7 @@ all_isoforms <- rbind(gencode_results, sqanti_results)
 
 if (INCLUDE_EXPRESSION) {
   message("====================================================================")
-  message("STEP 4: Calculating expression and read counts per cell type")
+  message("STEP 4: Calculating expression and read counts")
   message("====================================================================")
   message(paste("  Total isoforms:", nrow(all_isoforms)))
 
@@ -792,71 +789,105 @@ if (INCLUDE_EXPRESSION) {
   raw_counts <- dge_isoform$counts
 
   # Get transcript IDs from genes component
-  transcript_ids <- dge_isoform$genes$txid
+  if (!TRANSCRIPT_ID_COLUMN %in% colnames(dge_isoform$genes)) {
+    stop("ERROR: '", TRANSCRIPT_ID_COLUMN, "' column not found in DGEList$genes. ",
+         "Available columns: ", paste(colnames(dge_isoform$genes), collapse = ", "),
+         "\nSet TRANSCRIPT_ID_COLUMN in config.R to the correct column name.")
+  }
+  transcript_ids <- dge_isoform$genes[[TRANSCRIPT_ID_COLUMN]]
   rownames(cpm_normalized) <- transcript_ids
   rownames(raw_counts) <- transcript_ids
 
-  # Get sample metadata
+  # Use rownames as sample IDs (standard DGEList convention)
   sample_info <- dge_isoform$samples
+  sample_ids <- rownames(sample_info)
 
-  # Validate required columns
-  if (!"bamid" %in% colnames(sample_info)) {
-    stop("ERROR: 'bamid' column not found in DGEList$samples. Available columns: ",
-         paste(colnames(sample_info), collapse = ", "))
-  }
-  if (!"treatment" %in% colnames(sample_info)) {
-    stop("ERROR: 'treatment' column not found in DGEList$samples")
-  }
-  if (!"ct" %in% colnames(sample_info)) {
-    stop("ERROR: 'ct' column not found in DGEList$samples")
-  }
+  # Build sample groups from STRATIFY_BY configuration
+  if (is.null(STRATIFY_BY)) {
+    # No stratification: single group across all samples
+    group_labels <- "mean"
+    sample_group <- setNames(rep("mean", length(sample_ids)), sample_ids)
+    message("  Calculating expression and read counts (unstratified)...")
+  } else {
+    # Validate STRATIFY_BY columns exist in sample metadata
+    missing_cols <- setdiff(STRATIFY_BY, colnames(sample_info))
+    if (length(missing_cols) > 0) {
+      stop("ERROR: STRATIFY_BY column(s) not found in DGEList$samples: ",
+           paste(missing_cols, collapse = ", "),
+           "\nAvailable columns: ", paste(colnames(sample_info), collapse = ", "))
+    }
 
-  # Map cell type names to DGEList codes
-  ct_map <- c(
-    "DD_ALI" = "DD_ALI",
-    "DD" = "DD",
-    "DO_ALI" = "DO",
-    "AT2" = "AT",
-    "FB" = "FB",
-    "MV" = "MV"
-  )
-
-  # Calculate mean CPM and total raw read counts per cell type and condition.
-  # For each cell type, columns are added in order:
-  #   expr_DMSO_<ct>, total_reads_DMSO_<ct>, expr_Smg1i_<ct>, total_reads_Smg1i_<ct>
-  message("  Calculating expression and read counts per cell type...")
-  for (ct_name in names(ct_map)) {
-    ct_code <- ct_map[ct_name]
-    ct_suffix <- tolower(gsub("_", "", ct_name))
-
-    for (trt in c("DMSO", "Smg1i")) {
-      trt_samples <- sample_info %>%
-        filter(treatment == trt, ct == ct_code) %>%
-        pull(bamid)
-
-      expr_col  <- paste0("expr_", trt, "_", ct_suffix)
-      reads_col <- paste0("total_reads_", trt, "_", ct_suffix)
-
-      if (length(trt_samples) > 0) {
-        # Mean TMM-normalized CPM across replicates
-        cpm_means <- rowMeans(cpm_normalized[, trt_samples, drop = FALSE])
-        all_isoforms[[expr_col]] <- cpm_means[all_isoforms$isoform_id]
-
-        # Sum of raw counts across replicates
-        read_sums <- rowSums(raw_counts[, trt_samples, drop = FALSE])
-        all_isoforms[[reads_col]] <- read_sums[all_isoforms$isoform_id]
-
-        n_expressed <- sum(!is.na(all_isoforms[[expr_col]]) & all_isoforms[[expr_col]] > 0)
-        n_missing   <- sum(is.na(all_isoforms[[expr_col]]))
-        message(paste("    ", ct_name, trt, ":", n_expressed, "isoforms with expression > 0"))
-        if (n_missing > 0) {
-          message(paste("      Note:", n_missing, "isoforms not found in DGEList"))
-        }
+    # Get ordered levels per column, applying LEVEL_LABELS where provided
+    level_orders <- list()
+    for (col in STRATIFY_BY) {
+      raw_levels <- if (is.factor(sample_info[[col]])) {
+        levels(sample_info[[col]])
       } else {
-        all_isoforms[[expr_col]]  <- NA
-        all_isoforms[[reads_col]] <- NA
-        message(paste("    ", ct_name, trt, ": No samples found"))
+        unique(as.character(sample_info[[col]]))
       }
+
+      if (!is.null(LEVEL_LABELS) && col %in% names(LEVEL_LABELS) &&
+          !is.null(LEVEL_LABELS[[col]])) {
+        label_map <- LEVEL_LABELS[[col]]
+        unmapped <- setdiff(raw_levels, names(label_map))
+        if (length(unmapped) > 0) {
+          stop("ERROR: LEVEL_LABELS for '", col, "' is missing mappings for: ",
+               paste(unmapped, collapse = ", "),
+               "\nAll levels must be mapped when LEVEL_LABELS is provided for a column.")
+        }
+        level_orders[[col]] <- unname(label_map[names(label_map) %in% raw_levels])
+      } else {
+        level_orders[[col]] <- raw_levels
+      }
+    }
+
+    # Build group label for each sample (vectorized)
+    label_parts <- lapply(STRATIFY_BY, function(col) {
+      vals <- as.character(sample_info[[col]])
+      if (!is.null(LEVEL_LABELS) && col %in% names(LEVEL_LABELS) &&
+          !is.null(LEVEL_LABELS[[col]])) {
+        vals <- LEVEL_LABELS[[col]][vals]
+      }
+      vals
+    })
+    sample_group <- setNames(
+      do.call(paste, c(label_parts, list(sep = "_"))),
+      sample_ids
+    )
+
+    # Iterate groups in deterministic order (first STRATIFY_BY column varies fastest)
+    group_grid <- do.call(expand.grid, c(level_orders, list(stringsAsFactors = FALSE)))
+    group_labels <- apply(group_grid, 1, paste, collapse = "_")
+
+    message("  Calculating expression and read counts per group...")
+  }
+
+  # Calculate mean CPM and total raw read counts per group
+  for (group_label in group_labels) {
+    group_samples <- sample_ids[sample_group == group_label]
+
+    expr_col  <- paste0("expr_", group_label)
+    reads_col <- paste0("total_reads_", group_label)
+
+    if (length(group_samples) > 0) {
+      # Mean TMM-normalized CPM across replicates
+      cpm_means <- rowMeans(cpm_normalized[, group_samples, drop = FALSE])
+      all_isoforms[[expr_col]] <- cpm_means[all_isoforms$isoform_id]
+
+      # Sum of raw counts across replicates
+      read_sums <- rowSums(raw_counts[, group_samples, drop = FALSE])
+      all_isoforms[[reads_col]] <- read_sums[all_isoforms$isoform_id]
+
+      n_expressed <- sum(!is.na(all_isoforms[[expr_col]]) & all_isoforms[[expr_col]] > 0)
+      n_missing   <- sum(is.na(all_isoforms[[expr_col]]))
+      message(paste("    ", group_label, ":", n_expressed, "isoforms with expression > 0"))
+      if (n_missing > 0) {
+        message(paste("      Note:", n_missing, "isoforms not found in DGEList"))
+      }
+    } else {
+      all_isoforms[[expr_col]]  <- NA
+      all_isoforms[[reads_col]] <- NA
+      message(paste("    ", group_label, ": No samples found"))
     }
   }
 

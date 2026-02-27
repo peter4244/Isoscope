@@ -19,10 +19,8 @@ utr5_length	integer	5-prime UTR length in nucleotides (strand-aware)	134
 utr3_length	integer	3-prime UTR length in nucleotides (strand-aware)	3163
 is_protein_coding	logical	Whether isoform is protein-coding (from biotype or CDS presence)	TRUE
 coding_source	character	How coding status was determined: GENCODE_biotype, GENCODE_CDS, or SQANTI	GENCODE_biotype
-expr_DMSO_{ct}	numeric	Mean TMM-normalized CPM in DMSO samples for cell type (ddali, dd, doali, at2, fb, mv)	12.5
-total_reads_DMSO_{ct}	integer	Sum of raw read counts in DMSO samples for cell type	347
-expr_Smg1i_{ct}	numeric	Mean TMM-normalized CPM in Smg1i samples for cell type	15.3
-total_reads_Smg1i_{ct}	integer	Sum of raw read counts in Smg1i samples for cell type	412
+expr_{group}	numeric	Mean TMM-normalized CPM for sample group (groups defined by STRATIFY_BY in config.R)	12.5
+total_reads_{group}	integer	Sum of raw read counts for sample group	347
 total_reads_all_samples	integer	Sum of raw read counts across all samples and conditions	1523
 frame_matches_uniprot	logical	Translated CDS protein is a perfect match or perfect subset of UniProt canonical protein sequence (requires --protein flag; NA if not protein-coding or translation failed)	TRUE
 match_pct_uniprot	numeric	Percentage of 20-aa sliding windows in the translated protein that are found verbatim in the UniProt canonical sequence (requires --protein flag; NA if not protein-coding or translation failed)	93.4

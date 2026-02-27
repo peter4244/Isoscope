@@ -214,20 +214,27 @@ For each SQANTI isoform:
 
 **Data Source:** DGEList object containing:
 - TMM-normalized counts from edgeR
-- Sample metadata (treatment, cell type, replicate info)
-- 38 samples across 6 cell types x 2 treatments (DMSO + Smg1i)
+- Sample metadata with stratification columns (configurable in `config.R`)
+
+**Configuration (in `config.R`):**
+- `TRANSCRIPT_ID_COLUMN` - Column in `DGEList$genes` containing transcript IDs (default: `"txid"`)
+- `STRATIFY_BY` - Columns in `DGEList$samples` to stratify expression by:
+  - `NULL` → no stratification: `expr_mean`, `total_reads_mean`
+  - `c("treatment")` → one-way: `expr_DMSO`, `expr_Smg1i`, ...
+  - `c("treatment", "ct")` → two-way: `expr_DMSO_ddali`, `expr_Smg1i_at2`, ...
+- `LEVEL_LABELS` - Optional renaming of factor levels for cleaner column names
 
 **Process:**
 1. Load DGEList and calculate normalized CPM (counts per million)
-2. For each cell type and each treatment (DMSO and Smg1i):
-   - Calculate mean CPM across biological replicates
-   - Calculate sum of raw read counts across replicates
-3. Match isoforms by transcript ID (handles versioned IDs)
+2. For each sample group (defined by `STRATIFY_BY` columns):
+   - Calculate mean CPM across samples in the group
+   - Calculate sum of raw read counts across samples in the group
+3. Match isoforms by transcript ID (uses `TRANSCRIPT_ID_COLUMN`)
 4. Round CPM values to 2 significant figures for readability
 
-**Result:** Per-cell-type expression and read count columns for both conditions
-- `expr_DMSO_{ct}` / `expr_Smg1i_{ct}` - Mean TMM-normalized CPM
-- `total_reads_DMSO_{ct}` / `total_reads_Smg1i_{ct}` - Sum of raw read counts
+**Result:** Per-group expression and read count columns
+- `expr_{group}` - Mean TMM-normalized CPM for each sample group
+- `total_reads_{group}` - Sum of raw read counts for each sample group
 - `total_reads_all_samples` - Grand total across all samples
 - Missing values (NA) indicate isoform not detected in sequencing
 
@@ -395,13 +402,13 @@ USER INPUT
     v
 +---------------------------------------------------------------+
 | STEP 4: EXPRESSION CALCULATION (if --no-expr NOT set)         |
-|   Input: DGEList RDS (29 MB) - 38 samples                     |
+|   Input: DGEList RDS + STRATIFY_BY config                      |
 |   - Load TMM-normalized CPM + raw counts                       |
-|   - For each cell type x treatment (DMSO, Smg1i):             |
-|     - Mean CPM across biological replicates                    |
-|     - Sum of raw read counts across replicates                 |
+|   - For each sample group (defined by STRATIFY_BY):            |
+|     - Mean CPM across samples in the group                     |
+|     - Sum of raw read counts across samples in the group       |
 |   - Round CPM to 2 significant figures                         |
-|   Output: 24 expression columns + total_reads_all_samples     |
+|   Output: expr/total_reads per group + total_reads_all_samples |
 +---------------------------------------------------------------+
     |
     v
@@ -540,17 +547,15 @@ Tab-separated table with one row per isoform. See `column_definitions.tsv` for t
 | `is_protein_coding` | Boolean | Protein coding status | TRUE |
 | `coding_source` | String | Source of coding annotation | GENCODE_biotype |
 
-#### Expression Columns (per cell type, per treatment)
+#### Expression Columns (per sample group)
 
 | Column Pattern | Type | Description | Example |
 |----------------|------|-------------|---------|
-| `expr_DMSO_{ct}` | Float | Mean TMM-normalized CPM in DMSO | 12.5 |
-| `total_reads_DMSO_{ct}` | Integer | Sum of raw read counts in DMSO | 347 |
-| `expr_Smg1i_{ct}` | Float | Mean TMM-normalized CPM in Smg1i | 15.3 |
-| `total_reads_Smg1i_{ct}` | Integer | Sum of raw read counts in Smg1i | 412 |
+| `expr_{group}` | Float | Mean TMM-normalized CPM for sample group | 12.5 |
+| `total_reads_{group}` | Integer | Sum of raw read counts for sample group | 347 |
 | `total_reads_all_samples` | Integer | Grand total raw reads across all samples | 1523 |
 
-Cell type suffixes: `ddali`, `dd`, `doali`, `at2`, `fb`, `mv`
+Actual column names depend on `STRATIFY_BY` and `LEVEL_LABELS` in `config.R`. With the NMD defaults (`STRATIFY_BY = c("treatment", "ct")`), groups are `DMSO_ddali`, `Smg1i_ddali`, `DMSO_dd`, etc.
 
 #### Protein Comparison Columns (requires `--protein`)
 
@@ -689,11 +694,12 @@ Solution:
 - Verify gene is in GENCODE v49
 ```
 
-**Error: "DGEList RDS not found" or "bamid column not found"**
+**Error: "DGEList RDS not found" or column not found in DGEList**
 ```
 Solution:
 - If you don't have expression data, use --no-expr flag
 - Rscript gene_isoform_annotation.R MTCL1 --no-expr
+- Check TRANSCRIPT_ID_COLUMN and STRATIFY_BY in config.R match your DGEList
 ```
 
 **Error: "Missing required files" or "tabix index not found"**

@@ -18,9 +18,29 @@
 #   1. Run preprocess_sqanti_tabix.sh once to create tabix-indexed SQANTI GTF
 #   2. Ensure all reference files and DGEList RDS are available
 
+# Check C++ compiler version (needed for package installation from source)
+check_compiler <- function() {
+  gcc_version <- tryCatch({
+    out <- system("g++ --version 2>&1", intern = TRUE)
+    m <- regmatches(out[1], regexpr("[0-9]+\\.[0-9]+\\.[0-9]+", out[1]))
+    if (length(m) == 1) numeric_version(m) else NULL
+  }, error = function(e) NULL)
+  if (!is.null(gcc_version) && gcc_version < "5.0.0") {
+    stop(paste0(
+      "ERROR: System C++ compiler (GCC ", gcc_version, ") is too old to build R packages.\n",
+      "  Modern R packages require GCC >= 5.0.\n",
+      "  On an HPC cluster, load a newer compiler first:\n",
+      "    module load gcc/13.1.0   # or whichever version is available\n",
+      "    module avail gcc          # to see available versions\n",
+      "  Then re-run this script."),
+      call. = FALSE)
+  }
+}
+
 # Install missing packages automatically
 ensure_pkg <- function(pkg, bioc = FALSE) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
+    check_compiler()
     message(paste0("Installing missing package: ", pkg, "..."))
     if (bioc) {
       if (!requireNamespace("BiocManager", quietly = TRUE))

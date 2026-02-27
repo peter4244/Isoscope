@@ -18,6 +18,27 @@
 #   1. Run preprocess_sqanti_tabix.sh once to create tabix-indexed SQANTI GTF
 #   2. Ensure all reference files and DGEList RDS are available
 
+# Install missing packages automatically
+ensure_pkg <- function(pkg, bioc = FALSE) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    message(paste0("Installing missing package: ", pkg, "..."))
+    if (bioc) {
+      if (!requireNamespace("BiocManager", quietly = TRUE))
+        install.packages("BiocManager", repos = "https://cloud.r-project.org")
+      BiocManager::install(pkg, ask = FALSE, update = FALSE)
+    } else {
+      install.packages(pkg, repos = "https://cloud.r-project.org")
+    }
+  }
+}
+
+ensure_pkg("rtracklayer", bioc = TRUE)
+ensure_pkg("GenomicRanges", bioc = TRUE)
+ensure_pkg("dplyr")
+ensure_pkg("tidyr")
+ensure_pkg("readr")
+ensure_pkg("edgeR", bioc = TRUE)
+
 suppressPackageStartupMessages({
   library(rtracklayer)
   library(GenomicRanges)
@@ -473,11 +494,9 @@ if (Sys.which("tabix") == "") {
   stop("ERROR: tabix command not found. Install with: conda install -c bioconda htslib")
 }
 
-# Check for Biostrings if FASTA or protein output requested
+# Install Biostrings if needed for FASTA or protein output
 if (OUTPUT_FASTA || OUTPUT_PROTEIN) {
-  if (!requireNamespace("Biostrings", quietly = TRUE)) {
-    stop("ERROR: Biostrings package required for FASTA/protein output.\nInstall with: BiocManager::install('Biostrings')")
-  }
+  ensure_pkg("Biostrings", bioc = TRUE)
 }
 
 # Validate --uniprot_file if provided

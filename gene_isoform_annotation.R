@@ -94,6 +94,9 @@ if (!file.exists(config_path)) {
 }
 source(config_path)
 
+# Gene lookup file ships with the repo
+GENCODE_GENE_LOOKUP <- file.path(script_dir, "gencode_v49_genes.gtf")
+
 # Output files (will be set after gene name is resolved)
 OUTPUT_TSV <- NULL
 OUTPUT_GTF_FILE <- NULL
@@ -432,7 +435,7 @@ message("")
 # Check required files
 message("Checking required files...")
 files_to_check <- c(
-  "GENCODE GTF (unindexed)" = GENCODE_GTF_UNINDEXED,
+  "GENCODE gene lookup" = GENCODE_GENE_LOOKUP,
   "GENCODE GTF (indexed)" = GENCODE_GTF_INDEXED,
   "GENCODE GTF index" = paste0(GENCODE_GTF_INDEXED, ".tbi"),
   "SQANTI GTF (indexed)" = SQANTI_GTF_INDEXED,
@@ -500,7 +503,7 @@ message("====================================================================")
 if (SEARCH_BY == "name") {
   message(paste("  Searching by gene name:", GENE_NAME))
   gene_lines <- system(
-    paste0("grep 'gene_name \"", GENE_NAME, "\"' ", GENCODE_GTF_UNINDEXED,
+    paste0("grep 'gene_name \"", GENE_NAME, "\"' ", GENCODE_GENE_LOOKUP,
            " | awk -F'\\t' '$3 == \"gene\"'"),
     intern = TRUE
   )
@@ -519,7 +522,7 @@ if (SEARCH_BY == "name") {
 } else {
   message(paste("  Searching by Ensembl ID:", GENE_ID))
   gene_lines <- system(
-    paste0("grep 'gene_id \"", GENE_ID, "' ", GENCODE_GTF_UNINDEXED, " | grep -w gene | head -1"),
+    paste0("grep 'gene_id \"", GENE_ID, "' ", GENCODE_GENE_LOOKUP, " | grep -w gene | head -1"),
     intern = TRUE
   )
 

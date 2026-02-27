@@ -4,8 +4,7 @@
 #
 # All paths must be absolute. See README.md for file descriptions.
 
-# GENCODE reference files
-GENCODE_GTF_UNINDEXED <- "/path/to/gencode.v49.primary_assembly.annotation.chrnamesedited.gtf"
+# GENCODE reference files (gene lookup file ships with the repo — no config needed)
 GENCODE_GTF_INDEXED   <- "/path/to/gencode.v49.primary_assembly.annotation.chrnamesedited.sorted.gtf.gz"
 GENCODE_FASTA         <- "/path/to/gencode.v49.transcripts.fa.gz"
 

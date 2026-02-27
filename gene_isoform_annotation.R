@@ -68,6 +68,7 @@ if (length(args) == 0) {
   cat("  --gtf              Output GTF file with all isoforms\n")
   cat("  --fasta            Output FASTA file with isoform sequences\n")
   cat("  --protein          Output protein FASTA (translated CDS + Uniprot canonical)\n")
+  cat("  --output-dir <dir> Output directory (default: runs/<GENE_NAME>/)\n")
   cat("  --uniprot_file <f> Local Uniprot FASTA (default: fetch from API)\n")
   cat("  --no-expr          Skip expression calculation\n")
   cat("\nExamples:\n")
@@ -93,6 +94,17 @@ if ("--uniprot_file" %in% args) {
     UNIPROT_FILE <- args[uf_idx + 1]
   } else {
     stop("ERROR: --uniprot_file requires a file path argument")
+  }
+}
+
+# Parse --output-dir option (takes a value argument)
+OUTPUT_DIR_ARG <- NULL
+if ("--output-dir" %in% args) {
+  od_idx <- which(args == "--output-dir")
+  if (od_idx < length(args)) {
+    OUTPUT_DIR_ARG <- args[od_idx + 1]
+  } else {
+    stop("ERROR: --output-dir requires a directory path argument")
   }
 }
 
@@ -569,11 +581,23 @@ gene_end <- as.numeric(gene_parts[5])
 
 message(paste("  Gene coordinates:", paste0(gene_chr, ":", gene_start, "-", gene_end)))
 
+# Set output directory: user-specified, or default to runs/<GENE_NAME>/
+if (!is.null(OUTPUT_DIR_ARG)) {
+  output_dir <- OUTPUT_DIR_ARG
+} else {
+  output_dir <- file.path("runs", GENE_NAME)
+}
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+if (!dir.exists(output_dir)) {
+  stop(paste("ERROR: Could not create output directory:", output_dir))
+}
+message(paste("  Output directory:", output_dir))
+
 # Set output filenames now that GENE_NAME is determined
-OUTPUT_TSV <- paste0("isoform_annotation_", GENE_NAME, ".tsv")
-OUTPUT_GTF_FILE <- paste0("isoform_annotation_", GENE_NAME, ".gtf")
-OUTPUT_FASTA_FILE <- paste0("isoform_annotation_", GENE_NAME, ".fasta")
-OUTPUT_PROTEIN_FILE <- paste0("protein_sequences_", GENE_NAME, ".fasta")
+OUTPUT_TSV <- file.path(output_dir, paste0("isoform_annotation_", GENE_NAME, ".tsv"))
+OUTPUT_GTF_FILE <- file.path(output_dir, paste0("isoform_annotation_", GENE_NAME, ".gtf"))
+OUTPUT_FASTA_FILE <- file.path(output_dir, paste0("isoform_annotation_", GENE_NAME, ".fasta"))
+OUTPUT_PROTEIN_FILE <- file.path(output_dir, paste0("protein_sequences_", GENE_NAME, ".fasta"))
 
 message("")
 

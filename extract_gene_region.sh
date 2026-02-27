@@ -46,7 +46,7 @@ BAM input (one required):
   --bam FILE               Specific BAM file (repeatable)
 
 Options:
-  --output-dir DIR         Output directory (required)
+  --output-dir DIR         Output directory (default: runs/<GENE>/ when --gene is used)
   --gtf FILE               Gene annotation GTF to include in session
   --gencode-gtf FILE       Tabix-indexed or bgzipped GENCODE GTF for gene lookup
   --pad N                  Padding around region in bp (default: 5000)
@@ -96,8 +96,13 @@ if [[ -z "$BAM_DIR" && ${#BAM_FILES[@]} -eq 0 ]]; then
 fi
 
 if [[ -z "$OUTPUT_DIR" ]]; then
-    echo "ERROR: --output-dir is required"
-    usage 1
+    if [[ -n "$GENE" ]]; then
+        OUTPUT_DIR="runs/${GENE}"
+        echo "Defaulting output directory to: ${OUTPUT_DIR}/"
+    else
+        echo "ERROR: --output-dir is required (or use --gene to auto-default to runs/<GENE>/)"
+        usage 1
+    fi
 fi
 
 # ---- Step 1: Resolve gene coordinates ----

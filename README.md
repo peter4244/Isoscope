@@ -9,8 +9,35 @@ Developed for the NMD (Nonsense-Mediated Decay) lung cell line study but works w
 
 ---
 
+## Quick Start
+
+```bash
+# 1. Activate the shared conda environment
+conda activate /udd/repjc/.conda/envs/lr_igv
+
+# 2. Clone the repo and configure
+git clone https://changit.bwh.harvard.edu/repjc/lr_igv_from_bam.git && cd lr_igv_from_bam
+cp config.example.R config.R    # edit paths for your system
+cp config.example.sh config.sh  # edit paths for your system
+
+# 3. One-time preprocessing (~10-15 min)
+bash preprocess_sqanti_tabix.sh
+
+# 4. Annotate a gene (outputs to runs/MTCL1/)
+Rscript gene_isoform_annotation.R MTCL1 --gtf --fasta --protein
+
+# 5. Extract BAMs for IGV (outputs to same runs/MTCL1/)
+bash extract_gene_region.sh --gene MTCL1 --gencode-gtf /path/to/gencode.gtf.gz \
+    --bam-dir /path/to/bams/ --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf
+```
+
+All outputs land in `runs/MTCL1/` by default. Use `--output-dir <path>` to override.
+
+---
+
 ## Table of Contents
 
+- [Quick Start](#quick-start)
 - [Setup](#setup)
   - [Prerequisites](#prerequisites)
   - [Configuration](#configuration)
@@ -49,20 +76,23 @@ Developed for the NMD (Nonsense-Mediated Decay) lung cell line study but works w
 - **RAM**: 8 GB minimum, 16 GB recommended
 - **Disk**: ~5 GB for reference files
 
-#### Option A: Conda Environment (Recommended)
+#### Option A: Shared Conda Environment (Recommended)
 
-A self-contained conda environment bundles R, all R packages, and command-line tools so nothing needs to be compiled from source. This avoids compiler version issues common on HPC clusters.
+A shared conda environment is available on the cluster with R, all R packages, and command-line tools pre-installed:
 
 ```bash
-# Set strict channel priority (avoids ABI conflicts between conda-forge and bioconda)
-conda config --set channel_priority strict
-
-# Create and activate the environment
-conda env create -f environment.yml
-conda activate lr_igv
+conda activate /udd/repjc/.conda/envs/lr_igv
 ```
 
 After activation, all R packages, `tabix`, `bgzip`, and `samtools` are available — skip to [Configuration](#configuration).
+
+**External users** (outside the cluster): create your own environment from the provided `environment.yml`:
+
+```bash
+conda config --set channel_priority strict
+conda env create -f environment.yml
+conda activate lr_igv
+```
 
 #### Option B: Manual Installation
 
@@ -193,7 +223,7 @@ The pipeline extracts and integrates comprehensive transcript-level information 
 ### Quick Start
 
 ```bash
-# 1. Run for a gene of interest (TSV output only)
+# 1. Run for a gene of interest (TSV output only → runs/MTCL1/)
 Rscript gene_isoform_annotation.R MTCL1
 
 # 2. Include GTF and FASTA outputs
@@ -210,9 +240,12 @@ Rscript gene_isoform_annotation.R MTCL1 --no-expr
 
 # 6. Use Ensembl ID instead of gene name
 Rscript gene_isoform_annotation.R ENSG00000168502 --gtf --fasta --protein
+
+# 7. Write to current directory instead of runs/MTCL1/
+Rscript gene_isoform_annotation.R MTCL1 --output-dir .
 ```
 
-**Output:** Tab-separated file with comprehensive isoform annotations (exon structures, CDS positions, UTR lengths, expression levels, protein analysis, and more).
+**Output:** All files written to `runs/<GENE>/` by default (override with `--output-dir`). Tab-separated file with comprehensive isoform annotations (exon structures, CDS positions, UTR lengths, expression levels, protein analysis, and more).
 
 **Performance:** ~30-60 seconds per gene using tabix-indexed GTF files.
 
@@ -231,6 +264,7 @@ Rscript gene_isoform_annotation.R <GENE_NAME_OR_ID> [OPTIONS]
 - `--gtf` - Generate GTF file with all genomic features
 - `--fasta` - Generate FASTA file with transcript sequences
 - `--protein` - Generate protein FASTA with CDS translations and UniProt comparison columns
+- `--output-dir <path>` - Output directory (default: `runs/<GENE_NAME>/`; use `--output-dir .` for current directory)
 - `--uniprot_file <path>` - Use a local UniProt FASTA file instead of fetching from the API
 - `--no-expr` - Skip expression calculation (faster, no DGEList needed)
 
@@ -261,7 +295,10 @@ Rscript gene_isoform_annotation.R MTCL1 --no-expr
 # Using Ensembl ID instead of gene name
 Rscript gene_isoform_annotation.R ENSG00000168502
 
-# Batch processing multiple genes
+# Write to a custom directory
+Rscript gene_isoform_annotation.R MTCL1 --gtf --fasta --protein --output-dir ./my_output/
+
+# Batch processing multiple genes (each gets runs/<GENE>/)
 for gene in MTCL1 TP53 EGFR CFTR; do
   Rscript gene_isoform_annotation.R $gene --gtf --fasta --protein
 done
@@ -421,12 +458,12 @@ MFHALLQDSGR...
 Rscript gene_isoform_annotation.R MTCL1 --gtf --fasta --protein
 ```
 
-**Output Files:**
+**Output Files** (in `runs/MTCL1/`)**:**
 ```
-isoform_annotation_MTCL1.tsv       # 58 isoforms with full annotation columns
-isoform_annotation_MTCL1.gtf       # 640 genomic features
-isoform_annotation_MTCL1.fasta     # 58 transcript sequences
-protein_sequences_MTCL1.fasta      # 42 protein sequences (1 UniProt + 41 translated)
+runs/MTCL1/isoform_annotation_MTCL1.tsv       # 58 isoforms with full annotation columns
+runs/MTCL1/isoform_annotation_MTCL1.gtf       # 640 genomic features
+runs/MTCL1/isoform_annotation_MTCL1.fasta     # 58 transcript sequences
+runs/MTCL1/protein_sequences_MTCL1.fasta      # 42 protein sequences (1 UniProt + 41 translated)
 ```
 
 **Summary Statistics:**
@@ -446,14 +483,20 @@ Tools for visualizing genome-aligned (hg38) PacBio long-read BAMs in IGV and as 
 ### Quick Start
 
 ```bash
-# Extract a gene region from genome-aligned BAMs
+# Extract by gene name — outputs default to runs/MTCL1/
+bash extract_gene_region.sh --gene MTCL1 \
+    --gencode-gtf /path/to/gencode.v49.annotation.gtf.gz \
+    --bam-dir ../data/bams/genome_hg38/ \
+    --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf
+
+# Or extract by coordinates with explicit output dir
 bash extract_gene_region.sh --region chr18:8705271-8832780 \
     --bam-dir ../data/bams/genome_hg38/ \
     --output-dir ./igv_genome/ \
-    --gtf isoform_annotation_MTCL1.gtf
+    --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf
 
 # Open the resulting session in IGV
-# File > Open Session > igv_genome/igv_session.xml
+# File > Open Session > runs/MTCL1/igv_session.xml
 ```
 
 **Dependencies:** `samtools` (required), `tabix` (only for `--gene` lookup)
@@ -465,21 +508,21 @@ A portable shell script that extracts a gene region from genome-aligned BAMs int
 **Usage:**
 
 ```bash
-# Extract by genomic coordinates (primary interface)
+# Look up gene coordinates — outputs default to runs/MTCL1/
+bash extract_gene_region.sh --gene MTCL1 \
+    --gencode-gtf /path/to/gencode.v49.annotation.gtf.gz \
+    --bam-dir ../data/bams/genome_hg38/ \
+    --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf
+
+# Extract by genomic coordinates (requires --output-dir)
 bash extract_gene_region.sh --region chr18:8705271-8832780 \
     --bam-dir ../data/bams/genome_hg38/ \
     --output-dir ./igv_genome/ \
-    --gtf isoform_annotation_MTCL1.gtf
+    --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf
 
 # Extract specific BAM files
 bash extract_gene_region.sh --region chr18:8705271-8832780 \
     --bam /path/to/sample1.bam --bam /path/to/sample2.bam \
-    --output-dir ./igv_genome/
-
-# Look up gene coordinates from GENCODE GTF (slower, greps full file)
-bash extract_gene_region.sh --gene MTCL1 \
-    --gencode-gtf /path/to/gencode.v49.annotation.gtf.gz \
-    --bam-dir ../data/bams/genome_hg38/ \
     --output-dir ./igv_genome/
 
 # Adjust padding (default: 5000 bp on each side)
@@ -496,7 +539,7 @@ bash extract_gene_region.sh --region chr18:8705271-8832780 \
 | `--gene GENE_NAME` | Gene name lookup (requires `--gencode-gtf`) |
 | `--bam-dir DIR` | Directory containing `.bam` files |
 | `--bam FILE` | Specific BAM file (repeatable) |
-| `--output-dir DIR` | Output directory (required) |
+| `--output-dir DIR` | Output directory (default: `runs/<GENE>/` when `--gene` is used) |
 | `--gtf FILE` | Gene annotation GTF to include in IGV session |
 | `--gencode-gtf FILE` | Bgzipped GENCODE GTF for `--gene` lookup |
 | `--pad N` | Padding around region in bp (default: 5000) |
@@ -512,13 +555,13 @@ bash extract_gene_region.sh --region chr18:8705271-8832780 \
 **Output:**
 
 ```
-igv_genome/
-├── Sample13_DD_017Q_DMSO.aligned.bam       # Extracted BAM slice
-├── Sample13_DD_017Q_DMSO.aligned.bam.bai   # BAM index
+runs/MTCL1/                                   # Default when using --gene MTCL1
+├── Sample13_DD_017Q_DMSO.aligned.bam         # Extracted BAM slice
+├── Sample13_DD_017Q_DMSO.aligned.bam.bai     # BAM index
 ├── Sample14_DD_017Q_Smg1i.aligned.bam
 ├── Sample14_DD_017Q_Smg1i.aligned.bam.bai
-├── gene_annotation.gtf                      # Copied from --gtf
-└── igv_session.xml                          # Open in IGV
+├── gene_annotation.gtf                        # Copied from --gtf
+└── igv_session.xml                            # Open in IGV
 ```
 
 ### Sashimi Plots with ggsashimi
@@ -805,10 +848,10 @@ USER INPUT
 +---------------------------------------------------------------+
     |
     v
-FINAL OUTPUT: isoform_annotation_<GENE>.tsv
-              + isoform_annotation_<GENE>.gtf
-              + isoform_annotation_<GENE>.fasta
-              + protein_sequences_<GENE>.fasta
+FINAL OUTPUT: runs/<GENE>/isoform_annotation_<GENE>.tsv
+              + runs/<GENE>/isoform_annotation_<GENE>.gtf
+              + runs/<GENE>/isoform_annotation_<GENE>.fasta
+              + runs/<GENE>/protein_sequences_<GENE>.fasta
 ```
 
 ### NMD Study Terminology
@@ -927,6 +970,13 @@ If you use this pipeline in your research, please cite:
 ---
 
 ## Version History
+
+- **v3.3** (2026-02-27)
+  - Added `--output-dir` flag to both `gene_isoform_annotation.R` and `extract_gene_region.sh`
+  - Default output directory is now `runs/<GENE>/`, keeping all gene-related files together
+  - `extract_gene_region.sh` auto-defaults to `runs/<GENE>/` when `--gene` is used
+  - Added Quick Start section to README for fast onboarding
+  - Shared conda environment at `/udd/repjc/.conda/envs/lr_igv` (cluster users no longer need to create their own)
 
 - **v3.2** (2026-02-27)
   - Added `environment.yml` for reproducible conda setup (R, all R packages, htslib, samtools)

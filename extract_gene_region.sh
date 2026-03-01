@@ -79,6 +79,7 @@ done
 # ---- Validate dependencies ----
 if ! command -v samtools &>/dev/null; then
     echo "ERROR: samtools is required but not found in PATH"
+    echo "  Hint: conda activate lr_igv"
     exit 1
 fi
 

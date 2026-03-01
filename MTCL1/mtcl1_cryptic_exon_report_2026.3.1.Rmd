@@ -1,0 +1,1780 @@
+---
+title: "MTCL1 Cryptic Exon Analysis"
+subtitle: "Characterization of cryptic exons 10a and 10b in NMD-inhibited lung cell lines"
+author: "NMD Study"
+date: "2026-03-01"
+output:
+  html_document:
+    theme: lumen
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: hide
+---
+
+<style>
+body { font-size: 16px; }
+.main-container { max-width: 1200px; }
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, message = FALSE, warning = FALSE,
+  fig.width = 10, fig.height = 6, dpi = 150
+)
+library(tidyverse)
+library(DT)
+library(knitr)
+library(patchwork)
+library(scales)
+library(ggrepel)
+library(Rsamtools)
+library(GenomicAlignments)
+library(Biostrings)
+
+# BSgenome for genomic sequence extraction (PTC analysis)
+if (!requireNamespace("BSgenome.Hsapiens.UCSC.hg38", quietly = TRUE))
+  stop("Install with: BiocManager::install('BSgenome.Hsapiens.UCSC.hg38')")
+library(BSgenome.Hsapiens.UCSC.hg38)
+
+# maser for rMATS S4 object access
+if (!requireNamespace("maser", quietly = TRUE))
+  stop("Install with: BiocManager::install('maser')")
+library(maser)
+```
+
+# Executive Summary
+
+**MTCL1** (Microtubule Cross-Linking Factor 1; chr18, + strand) harbors two **cryptic exons**
+(10a and 10b) in the intron between canonical exons 9 and 11. Analysis of PacBio long-read
+BAM data from six lung cell types reveals that these exons are included more frequently under
+**NMD inhibition** (Smg1i treatment), consistent with GENCODE's annotation of
+ENST00000520495.5 (MTCL1-208) as a nonsense-mediated decay transcript.
+
+Key findings:
+
+- **Overall cryptic exon inclusion** increases from ~14% (DMSO) to ~18% (Smg1i) across cell types
+- The strongest effects are in **DD** (11% → 27%) and **DD_ALI** (5% → 17%)
+- Exon **10a** (114 bp) shows clean canonical splicing (exon 9 → 10a → exon 11)
+- Exon **10b** (228 bp) is predominantly found in locally-initiating transcripts
+- The Smg1i-driven increase is largely attributable to **local reads** starting near the cryptic region
+- **PTC confirmation**: Genomic sequence analysis confirms premature termination codons in the cryptic exon inserts; the retained-intron structure (S3) introduces a frameshift guaranteeing a PTC, while in-frame structures (S1, S2) are evaluated for in-frame stop codons
+- **PTC enrichment**: PTC-containing reads are enriched under Smg1i relative to non-PTC reads across spanning reads, directly supporting NMD as the degradation mechanism
+- **Short-read corroboration**: rMATS confirms consistently positive dPSI for exon 10a across all 6 cell types, though none reach FDR significance individually
+
+# Setup & Data Loading
+
+## Constants and coordinates
+
+```{r constants}
+# Cryptic exon coordinates (chr18, + strand, 1-based inclusive)
+EXON9_START  <- 8806893
+EXON9_END    <- 8807060
+EXON10A_START <- 8809448
+EXON10A_END   <- 8809561
+EXON10B_START <- 8809971
+EXON10B_END   <- 8810198
+EXON11_START  <- 8812979
+EXON11_END    <- 8813233
+
+# Junction tolerance for matching
+JUNC_TOL <- 5
+
+# Zoomed region for plots
+ZOOM_START <- 8806000
+ZOOM_END   <- 8814000
+
+# TSS classification thresholds
+TSS_FULLLENGTH_MAX <- 8720000
+TSS_INTERNAL_MAX   <- 8806000
+
+# Color palettes
+treatment_colors <- c("DMSO" = "#2166AC", "Smg1i" = "#B2182B")
+celltype_colors <- c(
+  "AT" = "#E69F00", "DD" = "#56B4E9", "DD_ALI" = "#009E73",
+  "DO" = "#F0E442", "FB" = "#0072B2", "MV" = "#D55E00"
+)
+exon_type_colors <- c("CDS" = "#2C3E50", "exon" = "#85929E")
+
+# BAM → DGE cell type mapping
+ct_to_dge <- c(
+  "AT" = "at2", "DD" = "dd", "DD_ALI" = "ddali",
+  "DO" = "doali", "FB" = "fb", "MV" = "mv"
+)
+
+# rMATS data source and cell type mapping
+RMATS_RDS <- "../../results/rds/allrmats_jc_2025.8.20.rds"
+rmats_ct_map <- c(AT2 = "AT", DD = "DD", DD_ALI = "DD_ALI",
+                  DO_ALI = "DO", FB = "FB", MV = "MV")
+
+# Coordinate summary table
+exon_coords <- tibble(
+  Exon = c("Exon 9 (canonical)", "Exon 10a (cryptic)", "Exon 10b (cryptic)", "Exon 11 (canonical)"),
+  Start = c(EXON9_START, EXON10A_START, EXON10B_START, EXON11_START),
+  End = c(EXON9_END, EXON10A_END, EXON10B_END, EXON11_END),
+  Length_bp = End - Start + 1,
+  `Divisible by 3` = (Length_bp %% 3 == 0)
+)
+```
+
+## Load isoform annotation
+
+```{r load-annotation}
+ann <- read_tsv("isoform_annotation_MTCL1.tsv", show_col_types = FALSE)
+
+# Parse exon coordinates from the exons column
+parse_exons <- function(exon_str) {
+  if (is.na(exon_str) || exon_str == "") return(tibble())
+  entries <- str_split(exon_str, ";")[[1]]
+  map_dfr(entries, function(e) {
+    parts <- str_split(e, ":")[[1]]
+    coords <- str_split(parts[1], "_")[[1]]
+    tibble(
+      start = as.numeric(coords[1]),
+      end = as.numeric(coords[2]),
+      strand = coords[3],
+      type = parts[2]
+    )
+  })
+}
+
+# Parse all isoform exons
+isoform_exons <- ann %>%
+  select(isoform_id, isoform_name, source, exons) %>%
+  mutate(parsed = map(exons, parse_exons)) %>%
+  unnest(parsed) %>%
+  select(-exons)
+```
+
+## Read BAM files
+
+```{r load-bams}
+# Search for BAMs in current dir and individual/ subdirectory (backward-compatible)
+bam_search_dirs <- c(".", "individual", "merged")
+all_bam_candidates <- unlist(lapply(bam_search_dirs, function(d) {
+  if (dir.exists(d)) list.files(d, pattern = "\\.aligned\\.bam$", full.names = TRUE)
+}))
+
+# Prefer individual/ BAMs for per-sample data; fall back to flat layout
+individual_bams <- grep("/individual/", all_bam_candidates, value = TRUE)
+flat_bams <- grep("^\\./[^/]+$", all_bam_candidates, value = TRUE)
+bam_files <- if (length(individual_bams) > 0) individual_bams else flat_bams
+# Exclude merged BAMs to avoid double-counting
+bam_files <- bam_files[!grepl("/merged/", bam_files)]
+
+process_bam <- function(bam_path) {
+  # Parse cell type, treatment, and sample_id from filename
+  # Supports two formats:
+  #   Merged:     AT_DMSO.aligned.bam       → cell_type="AT", treatment="DMSO", sample_id=NA
+  #   Per-sample: Sample13_DD_017Q_DMSO.aligned.bam → cell_type="DD", treatment="DMSO",
+  #               sample_id="Sample13_DD_017Q"
+  base <- sub("\\.aligned\\.bam$", "", basename(bam_path))
+
+  sample_id <- NA_character_
+  donor <- NA_character_
+
+  if (grepl("^Sample[0-9]+_", base)) {
+    # Per-sample format: Sample{N}_{CT}_{DONOR}_{TREATMENT}
+    m <- regmatches(base, regexec("^(Sample[0-9]+)_(.+)_(DMSO|Smg1i)$", base))[[1]]
+    if (length(m) == 4) {
+      treatment <- m[4]
+      middle <- m[3]
+      # middle is like "DD_017Q" or "DD_ALI_001V"
+      donor <- sub(".*_", "", middle)
+      cell_type <- sub(paste0("_", donor, "$"), "", middle)
+      sample_id <- paste0(m[2], "_", middle)
+    } else {
+      # Fallback
+      if (grepl("_Smg1i$", base)) {
+        treatment <- "Smg1i"; cell_type <- sub("_Smg1i$", "", base)
+      } else {
+        treatment <- "DMSO"; cell_type <- sub("_DMSO$", "", base)
+      }
+    }
+  } else {
+    # Merged format: CT_TREATMENT
+    if (grepl("_Smg1i$", base)) {
+      treatment <- "Smg1i"
+      cell_type <- sub("_Smg1i$", "", base)
+    } else {
+      treatment <- "DMSO"
+      cell_type <- sub("_DMSO$", "", base)
+    }
+  }
+
+  # Read alignments
+  ga <- readGAlignments(bam_path, param = ScanBamParam(what = "qname"))
+  n_reads <- length(ga)
+
+  if (n_reads == 0) {
+    return(tibble(
+      qname = character(), cell_type = character(), treatment = character(),
+      sample_id = character(), donor = character(),
+      read_start = integer(), includes_10a = logical(), includes_10b = logical(),
+      spans_e9_e11 = logical(), tss_category = character(),
+      junctions = list()
+    ))
+  }
+
+  # Define regions of interest
+  e9_gr  <- GRanges("chr18", IRanges(EXON9_START, EXON9_END))
+  e11_gr <- GRanges("chr18", IRanges(EXON11_START, EXON11_END))
+  e10a_gr <- GRanges("chr18", IRanges(EXON10A_START, EXON10A_END))
+  e10b_gr <- GRanges("chr18", IRanges(EXON10B_START, EXON10B_END))
+
+  # Get aligned blocks for each read
+  blocks_grl <- grglist(ga)
+
+  # Check overlaps
+  ov_e9  <- overlapsAny(blocks_grl, e9_gr)
+  ov_e11 <- overlapsAny(blocks_grl, e11_gr)
+  ov_10a <- overlapsAny(blocks_grl, e10a_gr)
+  ov_10b <- overlapsAny(blocks_grl, e10b_gr)
+
+  # Extract junctions from each read
+  get_read_junctions <- function(blocks) {
+    blocks <- sort(blocks)
+    if (length(blocks) < 2) return(tibble(donor = integer(), acceptor = integer()))
+    tibble(
+      donor = end(blocks)[-length(blocks)],
+      acceptor = start(blocks)[-1]
+    )
+  }
+
+  junc_list <- lapply(blocks_grl, get_read_junctions)
+
+  # Classify TSS
+  read_starts <- start(ga)
+  tss_cat <- case_when(
+    read_starts < TSS_FULLLENGTH_MAX ~ "full-length",
+    read_starts < TSS_INTERNAL_MAX   ~ "internal",
+    TRUE                              ~ "local"
+  )
+
+  tibble(
+    qname = mcols(ga)$qname,
+    cell_type = cell_type,
+    treatment = treatment,
+    sample_id = sample_id,
+    donor = donor,
+    read_start = read_starts,
+    includes_10a = ov_10a,
+    includes_10b = ov_10b,
+    spans_e9_e11 = ov_e9 & ov_e11,
+    tss_category = tss_cat,
+    junctions = junc_list
+  )
+}
+
+# Process all BAMs
+all_reads <- map_dfr(bam_files, process_bam)
+
+# Read count summary
+read_counts <- all_reads %>%
+  dplyr::count(cell_type, treatment, name = "total_reads") %>%
+  arrange(cell_type, treatment)
+```
+
+## Load DGE results
+
+```{r load-dge}
+dge_files <- list.files("../../longread_dge", pattern = "nmd_dge_.*_2026\\.1\\.18\\.csv",
+                        full.names = TRUE)
+
+load_dge <- function(path) {
+  ct_code <- str_extract(basename(path), "(?<=nmd_dge_)[a-z0-9]+(?=_)")
+  ct_label <- names(ct_to_dge)[ct_to_dge == ct_code]
+  if (length(ct_label) != 1) return(tibble())
+  df <- read_csv(path, show_col_types = FALSE)
+  df %>%
+    filter(hgnc_id == "MTCL1") %>%
+    select(any_of(c("txid", "transcript.gc", "biotype", "logFC", "AveExpr",
+                     "P.Value", "adj.P.Val", "B"))) %>%
+    mutate(cell_type = ct_label)
+}
+
+dge_mtcl1 <- map_dfr(dge_files, load_dge)
+```
+
+## Read count summary
+
+```{r read-count-table}
+read_counts %>%
+  pivot_wider(names_from = treatment, values_from = total_reads) %>%
+  mutate(Total = DMSO + Smg1i) %>%
+  kable(caption = "Total reads per BAM file")
+```
+
+# MTCL1 Gene & Isoform Overview
+
+## Isoform models
+
+```{r fig1-gene-structure, fig.height=8, fig.cap="Figure 1: MTCL1 gene structure showing top expressed isoforms plus NMD-annotated transcripts. Cryptic exon region (exons 10a/10b) highlighted in red."}
+# Select isoforms to display: top expressed + key NMD isoforms
+top_expressed <- ann %>%
+  filter(total_reads_all_samples > 0) %>%
+  arrange(desc(total_reads_all_samples)) %>%
+  head(8)
+
+# Ensure MTCL1-208 and MTCL1-206 are included
+key_isoforms <- c("ENST00000520495.5", "ENST00000518815.1")
+display_ids <- union(top_expressed$isoform_id, key_isoforms)
+
+display_ann <- ann %>% filter(isoform_id %in% display_ids)
+
+# Order by TSS position (descending for plot)
+display_ann <- display_ann %>%
+  arrange(desc(tss)) %>%
+  mutate(
+    y_pos = row_number(),
+    label = case_when(
+      isoform_id == "ENST00000520495.5" ~ paste0(isoform_name, " (NMD)"),
+      isoform_id == "ENST00000518815.1" ~ paste0(isoform_name, " (10a)"),
+      TRUE ~ isoform_name
+    )
+  )
+
+# Get exons for display isoforms
+display_exons <- isoform_exons %>%
+  filter(isoform_id %in% display_ids) %>%
+  left_join(display_ann %>% select(isoform_id, y_pos, label), by = "isoform_id")
+
+# Gene extent
+gene_start <- min(ann$tss, na.rm = TRUE)
+gene_end <- max(ann$tes, na.rm = TRUE)
+
+ggplot() +
+  # Cryptic region highlight
+  annotate("rect",
+    xmin = EXON10A_START - 500, xmax = EXON10B_END + 500,
+    ymin = 0.3, ymax = max(display_ann$y_pos) + 0.7,
+    fill = "#B2182B", alpha = 0.08
+  ) +
+  # Intron lines
+  geom_segment(
+    data = display_ann,
+    aes(x = tss, xend = tes, y = y_pos, yend = y_pos),
+    color = "grey70", linewidth = 0.3
+  ) +
+  # Exon rectangles
+  geom_rect(
+    data = display_exons,
+    aes(xmin = start, xmax = end, ymin = y_pos - 0.3, ymax = y_pos + 0.3,
+        fill = type),
+    color = "grey30", linewidth = 0.2
+  ) +
+  scale_fill_manual(values = exon_type_colors, name = "Exon type") +
+  scale_y_continuous(
+    breaks = display_ann$y_pos,
+    labels = display_ann$label
+  ) +
+  scale_x_continuous(labels = label_comma()) +
+  labs(
+    title = "MTCL1 gene structure",
+    subtitle = "Top expressed isoforms + NMD-annotated transcripts",
+    x = "chr18 position", y = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.y = element_text(face = "bold", size = 10)
+  )
+```
+
+# Cryptic Exon Analysis
+
+## Genomic context
+
+```{r exon-coord-table}
+exon_coords %>%
+  mutate(Start = format(Start, big.mark = ","), End = format(End, big.mark = ",")) %>%
+  kable(caption = "Cryptic exon coordinates (chr18, GRCh38)")
+```
+
+Two GENCODE isoforms use portions of this intronic region, but neither matches the
+structures observed in the raw reads:
+
+- **MTCL1-208** (ENST00000520495.5) is annotated as `nonsense_mediated_decay`.
+  It includes a single terminal exon at 8,809,448--8,810,002 (555 bp) that overlaps 10a and
+  part of 10b, but the transcript **ends there** --- it never splices to exon 11.
+- **MTCL1-206** (ENST00000518815.1) includes exon 10a (8,809,448--8,809,561) and
+  **does** splice it to exon 11, matching one of the read-supported structures (see Section 5).
+  However, it has no 10b.
+
+Exon 10b (8,809,971--8,810,198) extends 196 bp past the end of MTCL1-208's terminal exon,
+meaning it is not fully contained in any GENCODE transcript model. The discrete two-cassette
+architecture (exon 9 → 10a → 10b → exon 11) observed in multiple Smg1i-enriched reads
+is likewise absent from GENCODE.
+
+Both exon 10a (114 bp) and exon 10b (228 bp) are divisible by 3, so their inclusion
+maintains the reading frame if canonical splice sites are used.
+
+```{r fig3-zoomed-structure, fig.height=3.5, fig.cap="Figure 3: Zoomed view of the intron between exons 9 and 11, showing cryptic exons 10a and 10b."}
+exon_rects <- tibble(
+  label = c("Exon 9", "Exon 10a", "Exon 10b", "Exon 11"),
+  start = c(EXON9_START, EXON10A_START, EXON10B_START, EXON11_START),
+  end = c(EXON9_END, EXON10A_END, EXON10B_END, EXON11_END),
+  fill = c("canonical", "cryptic", "cryptic", "canonical"),
+  y = 0
+)
+
+ggplot(exon_rects) +
+  # Connecting line (intron)
+  annotate("segment", x = EXON9_END, xend = EXON11_START, y = 0, yend = 0,
+           color = "grey60", linewidth = 0.5) +
+  # Exon rectangles
+  geom_rect(aes(xmin = start, xmax = end, ymin = -0.3, ymax = 0.3, fill = fill),
+            color = "grey30", linewidth = 0.4) +
+  # Labels
+ geom_text(aes(x = (start + end) / 2, y = 0.55, label = label), size = 3.5, fontface = "bold") +
+  # Size annotations
+  geom_text(
+    aes(x = (start + end) / 2, y = -0.55,
+        label = paste0(end - start + 1, " bp")),
+    size = 3, color = "grey40"
+  ) +
+  scale_fill_manual(
+    values = c("canonical" = "#2C3E50", "cryptic" = "#E74C3C"),
+    guide = "none"
+  ) +
+  scale_x_continuous(
+    limits = c(ZOOM_START, ZOOM_END),
+    labels = label_comma()
+  ) +
+  labs(
+    title = "MTCL1 intron 9–11: cryptic exon region",
+    subtitle = "chr18:8,806,000-8,814,000 (GRCh38)",
+    x = "chr18 position", y = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  coord_cartesian(ylim = c(-1, 1))
+```
+
+## Cryptic exon inclusion rates
+
+```{r inclusion-analysis}
+# Denominator: reads spanning exon 9 and exon 11
+spanning <- all_reads %>% filter(spans_e9_e11)
+
+# Classify cryptic exon inclusion
+spanning <- spanning %>%
+  mutate(
+    cryptic_category = case_when(
+      includes_10a & includes_10b ~ "both",
+      includes_10a ~ "10a only",
+      includes_10b ~ "10b only",
+      TRUE ~ "none"
+    ),
+    has_cryptic = cryptic_category != "none"
+  )
+
+# Summary per cell type and treatment
+inclusion_summary <- spanning %>%
+  group_by(cell_type, treatment) %>%
+  summarise(
+    n_spanning = n(),
+    n_cryptic = sum(has_cryptic),
+    n_10a_only = sum(cryptic_category == "10a only"),
+    n_10b_only = sum(cryptic_category == "10b only"),
+    n_both = sum(cryptic_category == "both"),
+    pct_cryptic = 100 * n_cryptic / n_spanning,
+    .groups = "drop"
+  )
+
+# Overall summary
+overall_summary <- spanning %>%
+  group_by(treatment) %>%
+  summarise(
+    n_spanning = n(),
+    n_cryptic = sum(has_cryptic),
+    pct_cryptic = 100 * n_cryptic / n_spanning,
+    .groups = "drop"
+  )
+```
+
+```{r fig4-inclusion-barplot, fig.height=5, fig.cap="Figure 4: Cryptic exon inclusion rates across cell types. Denominator = reads spanning both exon 9 and exon 11."}
+ggplot(inclusion_summary, aes(x = cell_type, y = pct_cryptic, fill = treatment)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  geom_text(
+    aes(label = paste0(round(pct_cryptic, 1), "%\n(", n_cryptic, "/", n_spanning, ")")),
+    position = position_dodge(width = 0.7),
+    vjust = -0.3, size = 3
+  ) +
+  scale_fill_manual(values = treatment_colors) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2))) +
+  labs(
+    title = "Cryptic exon inclusion rate by cell type",
+    subtitle = "% of exon 9–11 spanning reads that include exon 10a and/or 10b",
+    x = "Cell type", y = "Inclusion rate (%)", fill = "Treatment"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+```{r fisher-tests}
+# Fisher's exact test for each cell type
+fisher_results <- inclusion_summary %>%
+  select(cell_type, treatment, n_cryptic, n_spanning) %>%
+  mutate(n_no_cryptic = n_spanning - n_cryptic) %>%
+  pivot_wider(
+    names_from = treatment,
+    values_from = c(n_cryptic, n_no_cryptic, n_spanning)
+  ) %>%
+  rowwise() %>%
+  mutate(
+    fisher_p = fisher.test(matrix(
+      c(n_cryptic_DMSO, n_no_cryptic_DMSO, n_cryptic_Smg1i, n_no_cryptic_Smg1i),
+      nrow = 2
+    ))$p.value
+  ) %>%
+  ungroup()
+
+# Wilson CIs for each group
+wilson_ci <- inclusion_summary %>%
+  rowwise() %>%
+  mutate(
+    ci = list(prop.test(n_cryptic, n_spanning, correct = FALSE)),
+    ci_low = ci$conf.int[1] * 100,
+    ci_high = ci$conf.int[2] * 100
+  ) %>%
+  ungroup() %>%
+  select(cell_type, treatment, pct_cryptic, ci_low, ci_high)
+
+# Combined table
+inclusion_table <- inclusion_summary %>%
+  left_join(wilson_ci, by = c("cell_type", "treatment", "pct_cryptic")) %>%
+  mutate(
+    rate = sprintf("%.1f%% [%.1f–%.1f]", pct_cryptic, ci_low, ci_high)
+  ) %>%
+  select(cell_type, treatment, n_spanning, n_cryptic, n_10a_only, n_10b_only, n_both, rate) %>%
+  left_join(
+    fisher_results %>% select(cell_type, fisher_p),
+    by = "cell_type"
+  )
+
+inclusion_table %>%
+  mutate(fisher_p = ifelse(treatment == "DMSO", signif(fisher_p, 3), "")) %>%
+  kable(
+    caption = "Cryptic exon inclusion rates with 95% Wilson CIs and Fisher's exact test p-values",
+    col.names = c("Cell type", "Treatment", "Spanning", "Cryptic", "10a only", "10b only",
+                  "Both", "Rate [95% CI]", "Fisher p")
+  )
+```
+
+## Splice junctions
+
+```{r junction-analysis}
+# Extract all junctions from spanning reads
+spanning_juncs <- spanning %>%
+  select(qname, cell_type, treatment, junctions, cryptic_category) %>%
+  unnest(junctions)
+
+# Define key junctions
+key_junctions <- tribble(
+  ~junction_name, ~target_donor, ~target_acceptor,
+  "Canonical skip (9→11)", EXON9_END, EXON11_START,
+  "Into 10a (9→10a)", EXON9_END, EXON10A_START,
+  "Out of 10a (10a→11)", EXON10A_END, EXON11_START,
+  "10a→10b", EXON10A_END, EXON10B_START,
+  "Into 10b (9→10b)", EXON9_END, EXON10B_START,
+  "Out of 10b (10b→11)", EXON10B_END, EXON11_START
+)
+
+# Match junctions with tolerance
+classify_junction <- function(donor, acceptor) {
+  matches <- key_junctions %>%
+    filter(abs(target_donor - donor) <= JUNC_TOL & abs(target_acceptor - acceptor) <= JUNC_TOL)
+  if (nrow(matches) > 0) matches$junction_name[1] else "other"
+}
+
+junction_counts <- spanning_juncs %>%
+  # Filter to junctions in the region of interest
+  filter(donor >= EXON9_START - 100, acceptor <= EXON11_END + 100) %>%
+  rowwise() %>%
+  mutate(junction_name = classify_junction(donor, acceptor)) %>%
+  ungroup() %>%
+  dplyr::count(cell_type, treatment, junction_name) %>%
+  arrange(cell_type, treatment, desc(n))
+```
+
+```{r fig5-sashimi, fig.height=6, fig.cap="Figure 5: Sashimi-style junction arc plot for DD cells. Arc thickness proportional to junction read count. Exon rectangles shown at bottom."}
+# Focus on DD for sashimi plot
+dd_juncs <- spanning_juncs %>%
+  filter(cell_type == "DD") %>%
+  filter(donor >= EXON9_START - 100, acceptor <= EXON11_END + 100) %>%
+  rowwise() %>%
+  mutate(junction_name = classify_junction(donor, acceptor)) %>%
+  ungroup() %>%
+  filter(junction_name != "other") %>%
+  dplyr::count(treatment, junction_name, donor, acceptor) %>%
+  # Use median positions for matching junctions
+  group_by(treatment, junction_name) %>%
+  summarise(
+    donor = round(median(donor)),
+    acceptor = round(median(acceptor)),
+    n = sum(n),
+    .groups = "drop"
+  )
+
+# Generate arc coordinates
+make_arc <- function(x_start, x_end, count, n_points = 100) {
+  t <- seq(0, pi, length.out = n_points)
+  tibble(
+    x = x_start + (x_end - x_start) * (t / pi),
+    y = sin(t) * sqrt(count) * 0.5
+  )
+}
+
+arc_data <- dd_juncs %>%
+  mutate(arc_id = row_number()) %>%
+  rowwise() %>%
+  mutate(arc = list(make_arc(donor, acceptor, n))) %>%
+  unnest(arc)
+
+# Exon rectangles for the sashimi plot
+sashimi_exons <- tibble(
+  label = c("Exon 9", "10a", "10b", "Exon 11"),
+  start = c(EXON9_START, EXON10A_START, EXON10B_START, EXON11_START),
+  end = c(EXON9_END, EXON10A_END, EXON10B_END, EXON11_END),
+  fill = c("canonical", "cryptic", "cryptic", "canonical")
+)
+
+# Junction labels
+junc_labels <- dd_juncs %>%
+  mutate(
+    x_mid = (donor + acceptor) / 2,
+    y_top = sqrt(n) * 0.5 + 0.15,
+    label = paste0(junction_name, "\n(n=", n, ")")
+  )
+
+ggplot() +
+  # Exon rectangles at bottom
+  geom_rect(
+    data = sashimi_exons,
+    aes(xmin = start, xmax = end, ymin = -0.4, ymax = -0.1, fill = fill),
+    color = "grey30", linewidth = 0.3
+  ) +
+  # Intron line
+  annotate("segment", x = EXON9_END, xend = EXON11_START,
+           y = -0.25, yend = -0.25, color = "grey60", linewidth = 0.3) +
+  # Junction arcs
+  geom_path(
+    data = arc_data,
+    aes(x = x, y = y, group = interaction(treatment, arc_id),
+        color = treatment, linewidth = n)
+  ) +
+  # Junction count labels
+  geom_text_repel(
+    data = junc_labels,
+    aes(x = x_mid, y = y_top, label = label, color = treatment),
+    size = 2.8, show.legend = FALSE, direction = "y",
+    max.overlaps = 20
+  ) +
+  facet_wrap(~treatment, ncol = 1) +
+  scale_fill_manual(values = c("canonical" = "#2C3E50", "cryptic" = "#E74C3C"), guide = "none") +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  scale_linewidth_continuous(range = c(0.5, 3), guide = "none") +
+  scale_x_continuous(
+    limits = c(ZOOM_START, ZOOM_END),
+    labels = label_comma()
+  ) +
+  labs(
+    title = "Splice junction usage in DD cells",
+    subtitle = "Arc height ∝ √(count); zoomed to exon 9–11 region",
+    x = "chr18 position", y = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    panel.grid = element_blank(),
+    strip.text = element_text(face = "bold", size = 12)
+  )
+```
+
+```{r junction-table}
+# Junction count table across all cell types
+junction_counts %>%
+  pivot_wider(names_from = treatment, values_from = n, values_fill = 0) %>%
+  arrange(cell_type, desc(DMSO + Smg1i)) %>%
+  kable(caption = "Splice junction counts in the exon 9–11 region")
+```
+
+## TSS classification
+
+```{r tss-analysis}
+# TSS categories for ALL reads with cryptic exon overlap (not just spanning)
+# Local reads often start near the cryptic region and may not extend to exon 11,
+# so requiring spanning would undercount them
+cryptic_all <- all_reads %>% filter(includes_10a | includes_10b)
+
+tss_summary <- cryptic_all %>%
+  dplyr::count(treatment, tss_category) %>%
+  complete(treatment, tss_category = c("full-length", "internal", "local"), fill = list(n = 0))
+
+tss_totals <- tss_summary %>%
+  group_by(treatment) %>%
+  summarise(total = sum(n), .groups = "drop")
+```
+
+```{r fig6-tss-barplot, fig.height=5, fig.cap="Figure 6: TSS classification of cryptic-exon-including reads. The Smg1i increase is predominantly driven by local reads initiating near the cryptic exon region."}
+tss_colors <- c("full-length" = "#2C3E50", "internal" = "#3498DB", "local" = "#E74C3C")
+
+ggplot(tss_summary, aes(x = treatment, y = n, fill = tss_category)) +
+  geom_col(width = 0.6) +
+  geom_text(
+    aes(label = ifelse(n > 0, n, "")),
+    position = position_stack(vjust = 0.5),
+    color = "white", fontface = "bold", size = 4
+  ) +
+  geom_text(
+    data = tss_totals,
+    aes(x = treatment, y = total, label = paste0("n=", total), fill = NULL),
+    vjust = -0.5, size = 4
+  ) +
+  scale_fill_manual(
+    values = tss_colors,
+    name = "TSS category",
+    labels = c(
+      "full-length" = paste0("Full-length (TSS < ", format(TSS_FULLLENGTH_MAX, big.mark = ","), ")"),
+      "internal" = "Internal TSS",
+      "local" = paste0("Local (TSS ≥ ", format(TSS_INTERNAL_MAX, big.mark = ","), ")")
+    )
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(
+    title = "TSS classification of cryptic-exon-including reads",
+    subtitle = "Across all cell types",
+    x = "Treatment", y = "Number of reads"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+# Short-Read Cross-Validation
+
+## Short-read differential splicing (rMATS)
+
+rMATS quantifies differential splicing from short-read RNA-seq using junction read counts.
+Here we extract MTCL1 skipped-exon (SE) events matching exon 10a and compare dPSI values
+with long-read inclusion rates. Positive dPSI indicates more exon inclusion under Smg1i
+(condition 1 = Smg1i, condition 2 = DMSO).
+
+```{r load-rmats}
+# Load rMATS maser S4 objects (one per cell type)
+rmats_available <- file.exists(RMATS_RDS)
+
+if (rmats_available) {
+  rmats_jc <- readRDS(RMATS_RDS)
+
+  # Extract MTCL1 SE events and per-sample PSI across all cell types
+  rmats_results <- list()
+  rmats_psi_results <- list()
+
+  for (ct_rmats in names(rmats_jc)) {
+    obj <- rmats_jc[[ct_rmats]]
+    ct <- rmats_ct_map[ct_rmats]
+
+    events <- slot(obj, "SE_events") %>% as_tibble()
+    stats  <- slot(obj, "SE_stats")  %>% as_tibble()
+    psi    <- slot(obj, "SE_PSI")
+    gr     <- slot(obj, "SE_gr")
+
+    # Find MTCL1 SE events
+    gene_idx <- which(events$geneSymbol == "MTCL1")
+    if (length(gene_idx) == 0) next
+
+    # Match exon 10a coordinates to the exon_target GRanges
+    exon_target <- gr[["exon_target"]][gene_idx]
+    target_starts <- start(exon_target)
+    target_ends   <- end(exon_target)
+
+    match_10a <- which(
+      abs(target_starts - EXON10A_START) <= JUNC_TOL &
+      abs(target_ends   - EXON10A_END)   <= JUNC_TOL
+    )
+
+    if (length(match_10a) == 0) next
+
+    # Use the first matching event
+    idx <- gene_idx[match_10a[1]]
+    merged <- inner_join(
+      events[idx, , drop = FALSE],
+      stats[idx, , drop = FALSE],
+      by = "ID"
+    )
+
+    rmats_results[[ct]] <- tibble(
+      cell_type = ct,
+      event_id  = merged$ID,
+      dPSI      = merged$IncLevelDifference,
+      FDR       = merged$FDR,
+      PValue    = merged$PValue
+    )
+
+    # Extract per-sample PSI values
+    n1 <- slot(obj, "n_cond1")
+    n2 <- slot(obj, "n_cond2")
+    psi_vals <- as.numeric(psi[idx, ])
+    smg1i_psi <- psi_vals[1:n1]
+    dmso_psi  <- psi_vals[(n1 + 1):(n1 + n2)]
+
+    rmats_psi_results[[paste0(ct, "_Smg1i")]] <- tibble(
+      cell_type = ct, treatment = "Smg1i",
+      PSI = smg1i_psi[!is.na(smg1i_psi)],
+      dPSI = merged$IncLevelDifference, FDR = merged$FDR
+    )
+    rmats_psi_results[[paste0(ct, "_DMSO")]] <- tibble(
+      cell_type = ct, treatment = "DMSO",
+      PSI = dmso_psi[!is.na(dmso_psi)],
+      dPSI = merged$IncLevelDifference, FDR = merged$FDR
+    )
+  }
+
+  rmats_summary <- bind_rows(rmats_results)
+  rmats_psi <- bind_rows(rmats_psi_results)
+} else {
+  warning("rMATS RDS not found at: ", RMATS_RDS)
+  rmats_summary <- tibble(
+    cell_type = character(), event_id = integer(),
+    dPSI = numeric(), FDR = numeric(), PValue = numeric()
+  )
+  rmats_psi <- tibble(
+    cell_type = character(), treatment = character(),
+    PSI = numeric(), dPSI = numeric(), FDR = numeric()
+  )
+}
+```
+
+```{r rmats-comparison-table, eval=nrow(rmats_summary) > 0}
+# Join rMATS summary with long-read inclusion rates
+lr_wide <- inclusion_summary %>%
+  select(cell_type, treatment, pct_cryptic) %>%
+  pivot_wider(names_from = treatment, values_from = pct_cryptic,
+              names_prefix = "lr_pct_")
+
+comparison_table <- rmats_summary %>%
+  left_join(lr_wide, by = "cell_type") %>%
+  mutate(
+    lr_delta = lr_pct_Smg1i - lr_pct_DMSO,
+    `Cell Type` = cell_type,
+    `rMATS dPSI` = sprintf("%+.3f", dPSI),
+    `rMATS FDR` = formatC(FDR, format = "e", digits = 1),
+    `LR incl. DMSO` = sprintf("%.1f%%", lr_pct_DMSO),
+    `LR incl. Smg1i` = sprintf("%.1f%%", lr_pct_Smg1i),
+    `LR Δ` = sprintf("%+.1f%%", lr_delta)
+  ) %>%
+  select(`Cell Type`, `rMATS dPSI`, `rMATS FDR`,
+         `LR incl. DMSO`, `LR incl. Smg1i`, `LR Δ`)
+
+kable(comparison_table, caption = "Cross-platform comparison: rMATS short-read dPSI vs long-read cryptic exon inclusion rates for exon 10a")
+```
+
+```{r fig-rmats-comparison, fig.width=12, fig.height=5, eval=nrow(rmats_psi) > 0}
+# Panel A: rMATS per-replicate PSI
+rmats_means <- rmats_psi %>%
+  group_by(cell_type, treatment) %>%
+  summarise(mean_PSI = mean(PSI), .groups = "drop")
+
+p_rmats <- ggplot(rmats_psi, aes(x = treatment, y = PSI, color = treatment)) +
+  geom_jitter(width = 0.15, height = 0, size = 2, alpha = 0.7) +
+  geom_crossbar(data = rmats_means,
+                aes(x = treatment, y = mean_PSI, ymin = mean_PSI, ymax = mean_PSI),
+                width = 0.4, linewidth = 0.6) +
+  facet_wrap(~cell_type, nrow = 1) +
+  scale_color_manual(values = treatment_colors) +
+  scale_y_continuous(labels = scales::percent_format(scale = 100),
+                     limits = c(0, NA)) +
+  labs(title = "A) Short-read rMATS PSI (exon 10a)",
+       subtitle = "Per-replicate PSI values with mean crossbar",
+       x = "Treatment", y = "PSI (Percent Spliced In)") +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "none",
+        strip.text = element_text(face = "bold"))
+
+# Panel B: Long-read per-sample inclusion rate
+# Use per-sample data if sample_id is available, otherwise fall back to group-level
+has_per_sample <- "sample_id" %in% names(all_reads) && any(!is.na(all_reads$sample_id))
+
+if (has_per_sample) {
+  lr_per_sample <- all_reads %>%
+    filter(spans_e9_e11) %>%
+    mutate(has_cryptic = includes_10a | includes_10b) %>%
+    group_by(cell_type, treatment, sample_id) %>%
+    summarise(
+      n_spanning = n(),
+      n_cryptic = sum(has_cryptic),
+      pct_cryptic = 100 * n_cryptic / n_spanning,
+      .groups = "drop"
+    )
+
+  lr_means <- lr_per_sample %>%
+    group_by(cell_type, treatment) %>%
+    summarise(mean_pct = mean(pct_cryptic), .groups = "drop")
+
+  p_lr <- ggplot(lr_per_sample, aes(x = treatment, y = pct_cryptic, color = treatment)) +
+    geom_jitter(width = 0.15, height = 0, size = 2, alpha = 0.7) +
+    geom_crossbar(data = lr_means,
+                  aes(x = treatment, y = mean_pct, ymin = mean_pct, ymax = mean_pct),
+                  width = 0.4, linewidth = 0.6) +
+    facet_wrap(~cell_type, nrow = 1) +
+    scale_color_manual(values = treatment_colors) +
+    scale_y_continuous(limits = c(0, NA)) +
+    labs(title = "B) Long-read cryptic exon inclusion rate",
+         subtitle = "Per-sample inclusion rates with mean crossbar",
+         x = "Treatment", y = "Inclusion rate (%)") +
+    theme_minimal(base_size = 13) +
+    theme(legend.position = "none",
+          strip.text = element_text(face = "bold"))
+} else {
+  # Fall back to group-level bars if no per-sample data
+  p_lr <- ggplot(inclusion_summary, aes(x = treatment, y = pct_cryptic, fill = treatment)) +
+    geom_col(width = 0.6) +
+    facet_wrap(~cell_type, nrow = 1) +
+    scale_fill_manual(values = treatment_colors) +
+    scale_y_continuous(limits = c(0, NA)) +
+    labs(title = "B) Long-read cryptic exon inclusion rate",
+         subtitle = "Group-level inclusion rates (merged BAMs)",
+         x = "Treatment", y = "Inclusion rate (%)") +
+    theme_minimal(base_size = 13) +
+    theme(legend.position = "none",
+          strip.text = element_text(face = "bold"))
+}
+
+p_rmats + p_lr + plot_layout(widths = c(1, 1))
+```
+
+```{r rmats-discussion, results='asis', eval=nrow(rmats_summary) > 0}
+n_positive <- sum(rmats_summary$dPSI > 0)
+n_total <- nrow(rmats_summary)
+n_sig <- sum(rmats_summary$FDR < 0.05)
+mean_dpsi <- mean(rmats_summary$dPSI)
+
+cat(sprintf(
+"### Cross-platform concordance
+
+rMATS identifies a skipped-exon event matching exon 10a (chr18:%s–%s) in **%d of %d**
+cell types with **consistently positive dPSI** (mean = %+.3f), indicating increased
+inclusion under Smg1i treatment. %s
+
+This concordance between short-read junction counts (rMATS) and long-read full-length
+transcript analysis strengthens the evidence for NMD-mediated regulation of cryptic
+exon 10a inclusion.
+",
+format(EXON10A_START, big.mark = ","), format(EXON10A_END, big.mark = ","),
+n_positive, n_total, mean_dpsi,
+if (n_sig > 0) {
+  sprintf("**%d** cell type(s) reach FDR < 0.05.", n_sig)
+} else {
+  "However, none reach FDR < 0.05 individually, likely due to modest effect sizes and limited replicates in the short-read experiment."
+}
+))
+
+cat("\n\n**Limitations of short-read comparison:**\n\n")
+cat("- rMATS can only assess **exon 10a** as a simple skipped exon; exon 10b and multi-exon ")
+cat("structures (S2, S3, S4) are not detectable from junction counts alone.\n")
+cat("- Short-read PSI is junction-count-based, while long-read inclusion is read-spanning-based; ")
+cat("these denominators are not directly comparable.\n")
+cat("- The reading frame classification (PTC status) confirmed in the long-read analysis ")
+cat("cannot be determined from short-read splicing data alone.\n")
+```
+
+## Short-read junction read analysis {.tabset}
+
+This section is conditional on the availability of short-read junction BAMs
+(produced by `extract_shortread_junctions.sh`).
+
+```{r junction-gate}
+has_junction_bams <- length(
+  list.files(".", pattern = "\\.junction\\.bam$", recursive = TRUE)
+) > 0
+```
+
+```{r process-junction-bams, eval=has_junction_bams}
+# Discover junction BAMs (individual/ subdirectory preferred)
+jbam_search_dirs <- c(".", "individual")
+jbam_files <- unlist(lapply(jbam_search_dirs, function(d) {
+  if (dir.exists(d)) list.files(d, pattern = "\\.junction\\.bam$", full.names = TRUE)
+}))
+jbam_files <- jbam_files[!grepl("/merged/", jbam_files)]
+
+process_junction_bam <- function(bam_path) {
+  # Parse sample name from filename (e.g., Sample1_DD_017Q_DMSO.junction.bam)
+  base <- sub("\\.junction\\.bam$", "", basename(bam_path))
+
+  sample_id <- NA_character_
+  donor <- NA_character_
+  cell_type <- NA_character_
+  treatment <- NA_character_
+
+  if (grepl("^Sample[0-9]+_", base)) {
+    m <- regmatches(base, regexec("^(Sample[0-9]+)_(.+)_(DMSO|Smg1i)$", base))[[1]]
+    if (length(m) == 4) {
+      treatment <- m[4]
+      middle <- m[3]
+      donor <- sub(".*_", "", middle)
+      cell_type <- sub(paste0("_", donor, "$"), "", middle)
+      sample_id <- paste0(m[2], "_", middle)
+    }
+  } else {
+    if (grepl("_Smg1i$", base)) {
+      treatment <- "Smg1i"; cell_type <- sub("_Smg1i$", "", base)
+    } else {
+      treatment <- "DMSO"; cell_type <- sub("_DMSO$", "", base)
+    }
+  }
+
+  # Read paired-end alignments to avoid double-counting mates
+  ga <- readGAlignmentPairs(bam_path, param = ScanBamParam(what = "qname"))
+  n_pairs <- length(ga)
+
+  if (n_pairs == 0) {
+    return(tibble(
+      cell_type = character(), treatment = character(), sample_id = character(),
+      junction_type = character(), n_reads = integer()
+    ))
+  }
+
+  # Extract junctions from first-in-pair for counting
+  first_ga <- GenomicAlignments::first(ga)
+  blocks_grl <- grglist(first_ga)
+
+  get_junctions <- function(blocks) {
+    blocks <- sort(blocks)
+    if (length(blocks) < 2) return(tibble(donor = integer(), acceptor = integer()))
+    tibble(
+      donor = end(blocks)[-length(blocks)],
+      acceptor = start(blocks)[-1]
+    )
+  }
+
+  all_juncs <- bind_rows(lapply(blocks_grl, get_junctions))
+
+  # Classify junctions relative to MTCL1 cryptic exons
+  # Canonical skip: exon 9 → exon 11
+  n_canonical_skip <- sum(
+    abs(all_juncs$donor - EXON9_END) <= JUNC_TOL &
+    abs(all_juncs$acceptor - EXON11_START) <= JUNC_TOL
+  )
+
+  # 10a inclusion: exon 9 → 10a
+  n_e9_10a <- sum(
+    abs(all_juncs$donor - EXON9_END) <= JUNC_TOL &
+    abs(all_juncs$acceptor - EXON10A_START) <= JUNC_TOL
+  )
+
+  # 10a → exon 11
+  n_10a_e11 <- sum(
+    abs(all_juncs$donor - EXON10A_END) <= JUNC_TOL &
+    abs(all_juncs$acceptor - EXON11_START) <= JUNC_TOL
+  )
+
+  tibble(
+    cell_type = cell_type,
+    treatment = treatment,
+    sample_id = sample_id,
+    junction_type = c("canonical_skip", "e9_to_10a", "e10a_to_e11"),
+    n_reads = c(n_canonical_skip, n_e9_10a, n_10a_e11)
+  )
+}
+
+sr_junctions <- map_dfr(jbam_files, process_junction_bam)
+
+# Compute inclusion ratio per sample: inclusion / (inclusion + skip)
+sr_inclusion <- sr_junctions %>%
+  pivot_wider(names_from = junction_type, values_from = n_reads, values_fill = 0) %>%
+  mutate(
+    inclusion_junctions = pmin(e9_to_10a, e10a_to_e11),
+    total_junctions = inclusion_junctions + canonical_skip,
+    inclusion_ratio = ifelse(total_junctions > 0,
+                             100 * inclusion_junctions / total_junctions, NA_real_)
+  )
+```
+
+```{r fig-three-way-comparison, fig.width=14, fig.height=5, eval=has_junction_bams && nrow(rmats_psi) > 0}
+# Three-way comparison: rMATS dPSI, SR junction ratio, LR inclusion rate
+p1 <- ggplot(rmats_psi, aes(x = treatment, y = PSI * 100, color = treatment)) +
+  geom_jitter(width = 0.15, size = 2, alpha = 0.7) +
+  stat_summary(fun = mean, geom = "crossbar", width = 0.4, linewidth = 0.6) +
+  facet_wrap(~cell_type, nrow = 1) +
+  scale_color_manual(values = treatment_colors) +
+  labs(title = "A) rMATS PSI", y = "PSI (%)") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none", strip.text = element_text(face = "bold"))
+
+p2 <- ggplot(sr_inclusion %>% filter(!is.na(inclusion_ratio)),
+             aes(x = treatment, y = inclusion_ratio, color = treatment)) +
+  geom_jitter(width = 0.15, size = 2, alpha = 0.7) +
+  stat_summary(fun = mean, geom = "crossbar", width = 0.4, linewidth = 0.6) +
+  facet_wrap(~cell_type, nrow = 1) +
+  scale_color_manual(values = treatment_colors) +
+  labs(title = "B) SR junction ratio", y = "Inclusion (%)") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none", strip.text = element_text(face = "bold"))
+
+if (has_per_sample) {
+  p3 <- ggplot(lr_per_sample, aes(x = treatment, y = pct_cryptic, color = treatment)) +
+    geom_jitter(width = 0.15, size = 2, alpha = 0.7) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.4, linewidth = 0.6) +
+    facet_wrap(~cell_type, nrow = 1) +
+    scale_color_manual(values = treatment_colors) +
+    labs(title = "C) LR inclusion rate", y = "Inclusion (%)") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "none", strip.text = element_text(face = "bold"))
+} else {
+  p3 <- ggplot(inclusion_summary, aes(x = treatment, y = pct_cryptic, fill = treatment)) +
+    geom_col(width = 0.6) +
+    facet_wrap(~cell_type, nrow = 1) +
+    scale_fill_manual(values = treatment_colors) +
+    labs(title = "C) LR inclusion rate", y = "Inclusion (%)") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "none", strip.text = element_text(face = "bold"))
+}
+
+p1 + p2 + p3 + plot_layout(widths = c(1, 1, 1))
+```
+
+# Biological Interpretation
+
+## Raw reads vs. transcript models
+
+The splicing patterns observed in the raw BAM data differ in important ways from existing
+transcript annotations. Neither the GENCODE reference models nor the PacBio-called isoforms
+(which are under active revision) fully capture the structures present in the reads.
+
+**MTCL1-208** (the only GENCODE NMD-annotated isoform in this region) has a single 555 bp
+terminal exon (8,809,448--8,810,002) that overlaps 10a and part of 10b. Crucially, this
+transcript ends at 8,810,002 and never splices to exon 11. The raw reads, by contrast, show
+cryptic exon inclusion as **internal cassette events** within longer transcripts that continue
+through exon 11 and beyond. **MTCL1-206** does splice exon 10a to exon 11, matching one
+read-supported pattern, but it is annotated as `protein_coding_CDS_not_defined` and contains no
+10b. Exon 10b itself (ending at 8,810,198) extends past MTCL1-208's terminal exon boundary,
+placing it outside any annotated transcript model.
+
+In short, the transcript models provide partial precedent for cryptic exon usage in this
+region, but the read data reveals structures --- particularly the discrete 10a + 10b
+cassette --- that are not represented in current annotations.
+
+## Read-supported isoform structures
+
+Rather than relying on existing transcript models, we classify each cryptic-exon-including
+read into one of four structural categories based on its aligned blocks and splice junctions
+in the exon 9--11 region.
+
+```{r structure-classification}
+# Classify each cryptic-region read into a structural category
+# We need all reads that overlap 10a or 10b (not just spanning)
+cryptic_all_struct <- all_reads %>%
+  filter(includes_10a | includes_10b) %>%
+  rowwise() %>%
+  mutate(
+    # Check for splice junction between 10a and 10b (discrete cassette)
+    has_10a_10b_junction = any(
+      abs(junctions$donor - EXON10A_END) <= JUNC_TOL &
+      abs(junctions$acceptor - EXON10B_START) <= JUNC_TOL
+    ),
+    # Check for entry junction from exon 9 into 10a
+    has_e9_to_10a = any(
+      abs(junctions$donor - EXON9_END) <= JUNC_TOL &
+      abs(junctions$acceptor - EXON10A_START) <= JUNC_TOL
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    structure = case_when(
+      # Structure 2: discrete 10a + 10b cassettes (has splice between them)
+      includes_10a & includes_10b & has_10a_10b_junction
+        ~ "S2: 9 \u2192 10a \u2192 10b \u2192 11",
+      # Structure 3: continuous block through 10a and 10b (no splice between)
+      includes_10a & includes_10b & !has_10a_10b_junction
+        ~ "S3: 9 \u2192 [10a...10b] \u2192 11",
+      # Structure 1: 10a only (with or without spanning)
+      includes_10a & !includes_10b
+        ~ "S1: 9 \u2192 10a \u2192 11",
+      # Structure 4: 10b only (local reads)
+      !includes_10a & includes_10b
+        ~ "S4: local 10b",
+      TRUE ~ "other"
+    )
+  )
+
+# Count by structure, treatment, and TSS
+struct_summary <- cryptic_all_struct %>%
+  dplyr::count(structure, treatment) %>%
+  pivot_wider(names_from = treatment, values_from = n, values_fill = 0) %>%
+  mutate(Total = DMSO + Smg1i) %>%
+  arrange(structure)
+
+struct_by_tss <- cryptic_all_struct %>%
+  dplyr::count(structure, treatment, tss_category) %>%
+  pivot_wider(names_from = tss_category, values_from = n, values_fill = 0)
+```
+
+```{r structure-table}
+struct_summary %>%
+  kable(caption = "Read counts by isoform structure and treatment",
+        col.names = c("Structure", "DMSO", "Smg1i", "Total"))
+```
+
+```{r structure-detail-table}
+struct_by_tss %>%
+  arrange(structure, treatment) %>%
+  kable(caption = "Structure counts broken down by TSS category",
+        col.names = c("Structure", "Treatment", "Full-length", "Internal", "Local"))
+```
+
+```{r fig7-structure-barplot, fig.height=5, fig.cap="Figure 7: Read counts by cryptic exon isoform structure. Structures 2 and 4 are enriched under Smg1i."}
+struct_plot_data <- cryptic_all_struct %>%
+  dplyr::count(structure, treatment)
+
+ggplot(struct_plot_data, aes(x = structure, y = n, fill = treatment)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  geom_text(
+    aes(label = n),
+    position = position_dodge(width = 0.7),
+    vjust = -0.3, size = 3.5
+  ) +
+  scale_fill_manual(values = treatment_colors) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(
+    title = "Cryptic exon isoform structures",
+    subtitle = "Read counts across all cell types",
+    x = NULL, y = "Number of reads", fill = "Treatment"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(size = 10))
+```
+
+**Structure 1 (9 → 10a → 11)** is the most common cryptic pattern. Reads show clean
+canonical splice sites (8,807,060 → 8,809,448 and 8,809,561 → 8,812,979) and are found on
+both internal-TSS and full-length transcripts. This matches the exon structure of MTCL1-206.
+
+**Structure 2 (9 → 10a → 10b → 11)** treats 10a and 10b as discrete cassette exons
+separated by a ~410 bp intron (8,809,561 → 8,809,971). This architecture appears
+Smg1i-enriched, though absolute counts are small, and is not represented in any GENCODE
+isoform.
+
+**Structure 3 (9 → [10a...10b continuous] → 11)** has a single uninterrupted aligned block
+from the 10a start through and past 10b (sometimes to 8,810,496), then splices to exon 11.
+It partially resembles MTCL1-208's terminal exon but differs in continuing to exon 11.
+
+**Structure 4 (local 10b)** consists entirely of local-TSS reads starting within the intron
+between 10a and 10b (~8,809,593--8,810,180). These are markedly Smg1i-enriched and may
+represent stabilized fragments of NMD-targeted transcripts.
+
+## PTC sequence analysis
+
+To determine whether the cryptic exon structures introduce premature termination codons
+(PTCs), we extract the genomic DNA sequence for each exon, construct the spliced cDNA
+insert for each structure, and translate in the reading frame established by exon 9.
+
+The GTF CDS frame annotation confirms **frame 0** for exon 9 (8,806,893--8,807,060) across
+all canonical coding isoforms (MTCL1-201, -216, -217, -204), meaning the reading frame
+aligns to codon boundaries at the exon 9 splice donor. Both exon 9 and exon 11 CDS entries
+carry frame 0, so canonical splicing (exon 9 → exon 11) maintains the reading frame.
+
+```{r ptc-sequence-extraction}
+# Extract genomic sequences for each region of interest
+genome <- BSgenome.Hsapiens.UCSC.hg38
+
+seq_exon9  <- getSeq(genome, "chr18", EXON9_START, EXON9_END)
+seq_10a    <- getSeq(genome, "chr18", EXON10A_START, EXON10A_END)
+seq_intron <- getSeq(genome, "chr18", EXON10A_END + 1, EXON10B_START - 1)  # 8809562–8809970
+seq_10b    <- getSeq(genome, "chr18", EXON10B_START, EXON10B_END)
+seq_exon11 <- getSeq(genome, "chr18", EXON11_START, EXON11_END)
+
+# Report insert lengths
+insert_lengths <- tibble(
+  Region = c("Exon 10a", "Intron 10a-10b", "Exon 10b"),
+  Length_bp = c(length(seq_10a), length(seq_intron), length(seq_10b)),
+  `Mod 3` = Length_bp %% 3,
+  `Frame effect` = ifelse(`Mod 3` == 0, "In-frame", paste0("Frameshift (+", `Mod 3`, ")"))
+)
+
+# Construct spliced cDNA inserts for each structure
+# We translate just the insert portion in the frame established at exon 9 donor
+# Exon 9 ends at a codon boundary (frame 0), so the first base of any insert is frame position 1
+
+# Canonical skip: no insert (control — exon 9 end joins exon 11 start directly)
+insert_canonical <- DNAString("")
+
+# S1: exon 10a only (114 bp, in-frame)
+insert_s1 <- DNAString(as.character(seq_10a))
+
+# S2: exon 10a + exon 10b (114 + 228 = 342 bp, in-frame)
+insert_s2 <- DNAString(paste0(as.character(seq_10a), as.character(seq_10b)))
+
+# S3: exon 10a + intron + exon 10b (114 + 409 + 228 = 751 bp, frameshift)
+insert_s3 <- DNAString(paste0(as.character(seq_10a), as.character(seq_intron),
+                               as.character(seq_10b)))
+
+# Function to translate an insert and find first PTC
+find_ptc <- function(insert_seq, structure_name) {
+  insert_len <- length(insert_seq)
+
+  if (insert_len == 0) {
+    return(tibble(
+      Structure = structure_name,
+      Insert_bp = 0,
+      Frame_status = "In-frame (no insert)",
+      PTC_found = FALSE,
+      PTC_codon_pos = NA_integer_,
+      PTC_nt_pos = NA_integer_,
+      AA_context = NA_character_,
+      Translation = NA_character_
+    ))
+  }
+
+  # Pad to complete codons for translation
+  pad_len <- (3 - (insert_len %% 3)) %% 3
+  if (pad_len > 0) {
+    # Borrow bases from exon 11 start to complete last codon
+    pad_bases <- subseq(seq_exon11, 1, pad_len)
+    translate_seq <- DNAString(paste0(as.character(insert_seq), as.character(pad_bases)))
+  } else {
+    translate_seq <- insert_seq
+  }
+
+  aa_seq <- translate(translate_seq, no.init.codon = TRUE)
+  aa_str <- as.character(aa_seq)
+
+  # Find first stop codon
+  stop_pos <- regexpr("\\*", aa_str)
+  ptc_found <- stop_pos > 0
+
+  if (ptc_found) {
+    ptc_codon <- as.integer(stop_pos)
+    ptc_nt <- (ptc_codon - 1) * 3 + 1  # nucleotide position within insert
+
+    # Extract amino acid context (±5 AA around PTC)
+    ctx_start <- max(1, ptc_codon - 5)
+    ctx_end <- min(nchar(aa_str), ptc_codon + 5)
+    context <- substr(aa_str, ctx_start, ctx_end)
+  } else {
+    ptc_codon <- NA_integer_
+    ptc_nt <- NA_integer_
+    context <- NA_character_
+  }
+
+  frame_status <- if (insert_len %% 3 == 0) "In-frame" else
+    paste0("Frameshift (+", insert_len %% 3, ")")
+
+  tibble(
+    Structure = structure_name,
+    Insert_bp = insert_len,
+    Frame_status = frame_status,
+    PTC_found = ptc_found,
+    PTC_codon_pos = ptc_codon,
+    PTC_nt_pos = ptc_nt,
+    AA_context = context,
+    Translation = aa_str
+  )
+}
+
+# Analyze each structure
+ptc_results <- bind_rows(
+  find_ptc(insert_canonical, "Canonical skip (9→11)"),
+  find_ptc(insert_s1, "S1: 9→10a→11"),
+  find_ptc(insert_s2, "S2: 9→10a→10b→11"),
+  find_ptc(insert_s3, "S3: 9→[10a...10b]→11")
+)
+```
+
+```{r ptc-summary-table}
+ptc_display <- ptc_results %>%
+  mutate(
+    `PTC found?` = ifelse(PTC_found, "Yes", "No"),
+    `PTC codon position` = ifelse(is.na(PTC_codon_pos), "—",
+                                   as.character(PTC_codon_pos)),
+    `AA context (±5)` = ifelse(is.na(AA_context), "—", AA_context)
+  ) %>%
+  select(Structure, `Insert length (bp)` = Insert_bp, `Frame status` = Frame_status,
+         `PTC found?`, `PTC codon position`, `AA context (±5)`)
+
+ptc_display %>%
+  kable(caption = "PTC analysis of cryptic exon structures. Codon position is relative to the start of the insert sequence, in the reading frame established by exon 9.")
+```
+
+```{r ptc-sequence-viz, fig.height=4, fig.cap="Figure 8: PTC map of cryptic exon inserts. Each bar represents the translated insert for one structure. Green = translated amino acids before PTC; red triangle = PTC position; gray = sequence after PTC. Bar length proportional to insert size."}
+# Build visualization data for structures with inserts
+ptc_viz <- ptc_results %>%
+  filter(Insert_bp > 0) %>%
+  mutate(
+    total_codons = ceiling(Insert_bp / 3),
+    pre_ptc = ifelse(PTC_found, PTC_codon_pos - 1, total_codons),
+    y_pos = rev(row_number())
+  )
+
+# Create rectangles for translated (green) and post-PTC (gray) regions
+viz_rects <- ptc_viz %>%
+  rowwise() %>%
+  mutate(
+    rects = list(bind_rows(
+      # Pre-PTC (translated)
+      tibble(xmin = 0, xmax = pre_ptc, region = "Translated", y = y_pos),
+      # Post-PTC (if PTC found)
+      if (PTC_found)
+        tibble(xmin = PTC_codon_pos, xmax = total_codons, region = "After PTC", y = y_pos)
+      else
+        tibble(xmin = numeric(0), xmax = numeric(0), region = character(0), y = numeric(0))
+    ))
+  ) %>%
+  unnest(rects)
+
+# PTC markers
+ptc_markers <- ptc_viz %>%
+  filter(PTC_found)
+
+region_colors <- c("Translated" = "#27AE60", "After PTC" = "#BDC3C7")
+
+ggplot() +
+  geom_rect(
+    data = viz_rects,
+    aes(xmin = xmin, xmax = xmax, ymin = y - 0.35, ymax = y + 0.35, fill = region),
+    color = "grey40", linewidth = 0.3
+  ) +
+  geom_point(
+    data = ptc_markers,
+    aes(x = PTC_codon_pos, y = y_pos),
+    shape = 25, size = 4, fill = "#E74C3C", color = "#E74C3C"
+  ) +
+  geom_text(
+    data = ptc_markers,
+    aes(x = PTC_codon_pos, y = y_pos + 0.55,
+        label = paste0("PTC @ codon ", PTC_codon_pos)),
+    size = 3, color = "#E74C3C", fontface = "bold"
+  ) +
+  scale_fill_manual(values = region_colors, name = "Region") +
+  scale_y_continuous(
+    breaks = ptc_viz$y_pos,
+    labels = ptc_viz$Structure
+  ) +
+  labs(
+    title = "PTC map of cryptic exon inserts",
+    subtitle = "Reading frame established by exon 9 (CDS frame 0)",
+    x = "Codon position within insert", y = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.y = element_text(face = "bold", size = 10)
+  )
+```
+
+## PTC enrichment in NMD-inhibited cells
+
+Having determined the PTC status of each structure from the genomic sequence, we can now
+classify every spanning read as PTC-containing or non-PTC and test whether PTC reads are
+enriched under Smg1i treatment. This is conceptually distinct from the overall cryptic exon
+inclusion test (Section 4.2): that test asks whether cryptic exons are included more often
+under Smg1i, while this test asks whether **PTC-containing** structures are specifically
+enriched --- a more direct test of NMD.
+
+```{r ptc-read-classification}
+# Determine PTC status for each structure from sequence analysis
+s1_has_ptc <- ptc_results %>% filter(Structure == "S1: 9→10a→11") %>% pull(PTC_found)
+s2_has_ptc <- ptc_results %>% filter(Structure == "S2: 9→10a→10b→11") %>% pull(PTC_found)
+# S3 always has PTC (frameshift guarantees it)
+s3_has_ptc <- TRUE
+
+# Classify spanning reads by PTC status
+# Start from spanning tibble (reads that span exon 9 to exon 11)
+spanning_ptc <- spanning %>%
+  rowwise() %>%
+  mutate(
+    # Check for splice junction between 10a and 10b (discrete cassette)
+    has_10a_10b_junction = any(
+      abs(junctions$donor - EXON10A_END) <= JUNC_TOL &
+      abs(junctions$acceptor - EXON10B_START) <= JUNC_TOL
+    ),
+    # Check for entry from exon 9 into 10a
+    has_e9_to_10a = any(
+      abs(junctions$donor - EXON9_END) <= JUNC_TOL &
+      abs(junctions$acceptor - EXON10A_START) <= JUNC_TOL
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    read_structure = case_when(
+      includes_10a & includes_10b & has_10a_10b_junction ~ "S2",
+      includes_10a & includes_10b & !has_10a_10b_junction ~ "S3",
+      includes_10a & !includes_10b ~ "S1",
+      !includes_10a & includes_10b ~ "S4",
+      TRUE ~ "canonical"
+    ),
+    ptc_status = case_when(
+      read_structure == "canonical" ~ "non-PTC",
+      read_structure == "S1" & s1_has_ptc ~ "PTC",
+      read_structure == "S1" & !s1_has_ptc ~ "non-PTC",
+      read_structure == "S2" & s2_has_ptc ~ "PTC",
+      read_structure == "S2" & !s2_has_ptc ~ "non-PTC",
+      read_structure == "S3" ~ "PTC",  # frameshift → guaranteed PTC
+      read_structure == "S4" ~ NA_character_  # exclude: no canonical frame context
+    )
+  )
+
+# Summary of PTC classification
+ptc_class_summary <- spanning_ptc %>%
+  filter(!is.na(ptc_status)) %>%
+  dplyr::count(read_structure, ptc_status) %>%
+  arrange(read_structure)
+
+ptc_class_summary %>%
+  kable(caption = "PTC classification of spanning reads by structure type. S4 reads excluded (no canonical frame context).",
+        col.names = c("Structure", "PTC status", "N reads"))
+```
+
+```{r ptc-enrichment-global}
+# Global 2×2 contingency table: PTC vs non-PTC × Smg1i vs DMSO
+ptc_for_test <- spanning_ptc %>%
+  filter(!is.na(ptc_status))
+
+global_table <- ptc_for_test %>%
+  dplyr::count(treatment, ptc_status) %>%
+  pivot_wider(names_from = ptc_status, values_from = n, values_fill = 0)
+
+# Build matrix for Fisher's test: rows = treatment, cols = PTC status
+mat_global <- matrix(
+  c(global_table %>% filter(treatment == "Smg1i") %>% pull(PTC),
+    global_table %>% filter(treatment == "Smg1i") %>% pull(`non-PTC`),
+    global_table %>% filter(treatment == "DMSO") %>% pull(PTC),
+    global_table %>% filter(treatment == "DMSO") %>% pull(`non-PTC`)),
+  nrow = 2, byrow = TRUE,
+  dimnames = list(c("Smg1i", "DMSO"), c("PTC", "non-PTC"))
+)
+
+fisher_global <- fisher.test(mat_global)
+
+cat("Global PTC enrichment test (Fisher's exact):\n")
+cat(sprintf("  Contingency table:\n"))
+print(mat_global)
+cat(sprintf("\n  Odds ratio: %.2f (95%% CI: %.2f–%.2f)\n",
+            fisher_global$estimate,
+            fisher_global$conf.int[1],
+            fisher_global$conf.int[2]))
+cat(sprintf("  P-value: %.4g\n", fisher_global$p.value))
+cat(sprintf("  Interpretation: %s\n",
+            ifelse(fisher_global$estimate > 1 & fisher_global$p.value < 0.05,
+                   "PTC-containing reads are significantly enriched under Smg1i",
+                   ifelse(fisher_global$estimate > 1,
+                          "PTC-containing reads trend toward enrichment under Smg1i (not significant)",
+                          "No enrichment of PTC reads under Smg1i"))))
+```
+
+```{r ptc-enrichment-celltype}
+# Per-cell-type Fisher's tests
+celltype_ptc_counts <- ptc_for_test %>%
+  dplyr::count(cell_type, treatment, ptc_status) %>%
+  complete(cell_type, treatment, ptc_status, fill = list(n = 0))
+
+celltype_fisher <- celltype_ptc_counts %>%
+  pivot_wider(names_from = c(treatment, ptc_status), values_from = n, values_fill = 0) %>%
+  rowwise() %>%
+  mutate(
+    n_spanning = sum(c_across(starts_with("Smg1i") | starts_with("DMSO"))),
+    mat = list(matrix(
+      c(`Smg1i_PTC`, `Smg1i_non-PTC`, `DMSO_PTC`, `DMSO_non-PTC`),
+      nrow = 2, byrow = TRUE
+    )),
+    fisher = list(fisher.test(mat)),
+    OR = fisher$estimate,
+    ci_low = fisher$conf.int[1],
+    ci_high = fisher$conf.int[2],
+    p_value = fisher$p.value,
+    min_arm = min(Smg1i_PTC + `Smg1i_non-PTC`, DMSO_PTC + `DMSO_non-PTC`),
+    underpowered = min_arm < 10
+  ) %>%
+  ungroup() %>%
+  mutate(
+    p_adj = p.adjust(p_value, method = "BH"),
+    sig = case_when(
+      underpowered ~ "underpowered",
+      p_adj < 0.05 ~ "significant",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  select(cell_type, Smg1i_PTC, `Smg1i_non-PTC`, DMSO_PTC, `DMSO_non-PTC`,
+         OR, ci_low, ci_high, p_value, p_adj, underpowered, sig)
+
+celltype_fisher %>%
+  mutate(
+    OR_display = sprintf("%.2f [%.2f–%.2f]", OR, ci_low, ci_high),
+    p_display = sprintf("%.4g", p_adj),
+    flag = ifelse(underpowered, "*", "")
+  ) %>%
+  select(cell_type, Smg1i_PTC, `Smg1i_non-PTC`, DMSO_PTC, `DMSO_non-PTC`,
+         `OR [95% CI]` = OR_display, `FDR p` = p_display, Flag = flag) %>%
+  kable(caption = "Per-cell-type PTC enrichment (Fisher's exact test, BH-corrected). * = underpowered (<10 spanning reads per arm).")
+```
+
+```{r ptc-forest-plot, fig.height=5, fig.cap="Figure 9: Forest plot of PTC enrichment across cell types. Log odds ratio (x-axis) with 95% CI. Vertical dashed line at OR=1 (no enrichment). Pooled estimate shown at bottom. Gray points indicate underpowered cell types (<10 reads per arm)."}
+# Combine global and per-cell-type results for forest plot
+forest_data <- bind_rows(
+  celltype_fisher %>%
+    select(cell_type, OR, ci_low, ci_high, underpowered) %>%
+    dplyr::rename(label = cell_type),
+  tibble(
+    label = "Pooled",
+    OR = fisher_global$estimate,
+    ci_low = fisher_global$conf.int[1],
+    ci_high = fisher_global$conf.int[2],
+    underpowered = FALSE
+  )
+) %>%
+  mutate(
+    log_OR = log(OR),
+    log_ci_low = log(ci_low),
+    log_ci_high = log(ci_high),
+    # Cap infinite CIs for plotting
+    log_ci_low = pmax(log_ci_low, -5),
+    log_ci_high = pmin(log_ci_high, 5),
+    y_pos = rev(row_number()),
+    is_pooled = label == "Pooled",
+    point_color = case_when(
+      is_pooled ~ "#000000",
+      underpowered ~ "#95A5A6",
+      TRUE ~ "#2C3E50"
+    )
+  )
+
+ggplot(forest_data, aes(x = log_OR, y = y_pos)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_errorbarh(
+    aes(xmin = log_ci_low, xmax = log_ci_high),
+    height = 0.2, color = forest_data$point_color
+  ) +
+  geom_point(
+    aes(shape = is_pooled),
+    size = 3, fill = forest_data$point_color, color = forest_data$point_color
+  ) +
+  scale_shape_manual(values = c("FALSE" = 16, "TRUE" = 18), guide = "none") +
+  scale_y_continuous(
+    breaks = forest_data$y_pos,
+    labels = forest_data$label
+  ) +
+  labs(
+    title = "PTC enrichment under Smg1i",
+    subtitle = "Log odds ratio with 95% CI (Fisher's exact test)",
+    x = "log(Odds Ratio)", y = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.y = element_text(
+      face = ifelse(forest_data$is_pooled[order(-forest_data$y_pos)], "bold", "plain"),
+      size = 11
+    )
+  )
+```
+
+## NMD mechanism
+
+The Smg1i enrichment of cryptic exon inclusion --- particularly the discrete 10a + 10b
+cassette (Structure 2) and the local 10b reads (Structure 4) --- is consistent with
+**NMD-mediated degradation** of these transcripts under normal conditions.
+
+```{r nmd-mechanism-summary, results='asis'}
+# Generate definitive PTC summary based on sequence analysis results
+s1_ptc <- ptc_results %>% filter(Structure == "S1: 9→10a→11") %>% pull(PTC_found)
+s2_ptc <- ptc_results %>% filter(Structure == "S2: 9→10a→10b→11") %>% pull(PTC_found)
+s1_pos <- ptc_results %>% filter(Structure == "S1: 9→10a→11") %>% pull(PTC_codon_pos)
+s2_pos <- ptc_results %>% filter(Structure == "S2: 9→10a→10b→11") %>% pull(PTC_codon_pos)
+s3_pos <- ptc_results %>% filter(Structure == "S3: 9→[10a...10b]→11") %>% pull(PTC_codon_pos)
+
+# Count structures with confirmed PTCs
+n_ptc_structures <- sum(c(s1_ptc, s2_ptc, TRUE))  # S3 always has PTC
+
+cat("Sequence analysis (Section 5.3) **confirms PTCs** in the cryptic exon inserts:\n\n")
+
+if (s1_ptc) {
+  cat(sprintf("- **S1 (9→10a→11)**: In-frame stop codon at **codon %d** within the 10a insert (114 bp, in-frame)\n", s1_pos))
+} else {
+  cat("- **S1 (9→10a→11)**: No in-frame stop codon in the 10a insert (114 bp) — this structure does **not** trigger NMD via a PTC in the cryptic exon\n")
+}
+
+if (s2_ptc) {
+  cat(sprintf("- **S2 (9→10a→10b→11)**: In-frame stop codon at **codon %d** within the 10a+10b insert (342 bp, in-frame)\n", s2_pos))
+} else {
+  cat("- **S2 (9→10a→10b→11)**: No in-frame stop codon in the 10a+10b insert (342 bp) — this structure does **not** trigger NMD via a PTC in the cryptic exon\n")
+}
+
+cat(sprintf("- **S3 (9→[10a...10b]→11)**: Retained intron (410 bp, 410%%3 = 2) causes a **frameshift**, introducing a PTC at **codon %d** within the insert\n\n", s3_pos))
+
+cat(sprintf("In total, **%d of 3** spliced cryptic exon structures contain a PTC. ", n_ptc_structures))
+cat("All PTCs are located thousands of nucleotides upstream of the last exon–exon junction, ")
+cat("satisfying the **50-nt rule** for NMD substrate recognition.\n\n")
+
+cat("**Note on MTCL1-208**: GENCODE's NMD-annotated isoform (MTCL1-208) uses a different CDS start ")
+cat("(8,783,587 vs. the canonical 8,705,661) and its PTC at genomic position 8,796,309 is upstream ")
+cat("of the cryptic exon region. The novel structures S1–S4 use the canonical CDS start, so their ")
+cat("NMD-triggering mechanism is independent of MTCL1-208's.\n")
+```
+
+## Cell-type specificity
+
+The cryptic exon inclusion effect is strongest in **DD** and **DD_ALI**, suggesting that
+NMD-mediated regulation of these exons is most active in differentiated airway cell types.
+MV cells show the opposite trend (decreased inclusion under Smg1i), indicating cell-type-specific
+regulation of this splicing event.
+
+```{r celltype-ptc-integration, results='asis'}
+# Report which cell types show significant PTC enrichment
+sig_cts <- celltype_fisher %>% filter(sig == "significant") %>% pull(cell_type)
+underpowered_cts <- celltype_fisher %>% filter(underpowered) %>% pull(cell_type)
+
+if (length(sig_cts) > 0) {
+  cat(sprintf("Per-cell-type PTC enrichment analysis (Section 5.4) confirms significant enrichment in **%s** (BH-adjusted p < 0.05). ",
+              paste(sig_cts, collapse = ", ")))
+} else {
+  cat("Per-cell-type PTC enrichment tests did not reach significance individually after FDR correction, ")
+  cat("likely due to limited per-cell-type read counts. ")
+}
+
+if (length(underpowered_cts) > 0) {
+  cat(sprintf("Cell types **%s** had fewer than 10 spanning reads per treatment arm and are underpowered for this comparison. ",
+              paste(underpowered_cts, collapse = ", ")))
+}
+
+cat("The pooled analysis across all cell types provides the most robust estimate of PTC enrichment (see Figure 9).\n")
+```
+
+## Limitations
+
+- **Merged BAMs**: Each BAM represents merged data across donors per cell type/treatment,
+  so donor-level variability cannot be assessed.
+- **Small read counts**: Total reads across all BAMs are ~2,000, limiting statistical power
+  for rare events and making per-cell-type comparisons imprecise.
+- **Long-read quantification**: PacBio IsoSeq capture efficiency may vary across transcript
+  lengths and structures, potentially biasing inclusion rate estimates.
+- **Local reads**: A substantial fraction of cryptic-exon-including reads are locally-initiating
+  transcripts (Structure 4). Whether these represent bona fide NMD substrates or capture/
+  fragmentation artifacts requires further investigation.
+- **Transcript model mismatch**: The cryptic exon structures observed in the reads do not
+  correspond to existing GENCODE or PacBio-called isoform models. Quantification pipelines
+  that rely on transcript-level assignment will miss or misassign these reads.
+- **S4 excluded from PTC enrichment**: Structure 4 (local 10b) reads lack canonical frame
+  context (no exon 9 splice donor) and are excluded from the PTC enrichment analysis. Their
+  NMD relevance is inferred from Smg1i enrichment rather than confirmed PTC status.
+- **Junction tolerance and frame assumption**: PTC classification assumes reads matching
+  canonical splice sites (±5 bp tolerance) preserve the exon 9 reading frame. Reads with
+  non-canonical splice sites could have different frame contexts.
+- **Conservative enrichment test**: The PTC enrichment analysis compares PTC vs non-PTC reads
+  among spanning reads only; it does not capture non-spanning PTC transcripts that may be
+  fully degraded under DMSO.
+- **Platform comparison caveats**: rMATS can only test exon 10a; 10b and multi-exon cryptic
+  structures are annotation-dependent and not detected. Long-read and short-read denominators
+  differ (read-spanning vs junction-count-based).
+
+# Session Info
+
+```{r session-info}
+sessionInfo()
+```

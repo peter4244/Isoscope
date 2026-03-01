@@ -3,7 +3,7 @@
 A toolkit for PacBio long-read isoform analysis, providing:
 
 - **Isoform Annotation Pipeline** — Extract comprehensive transcript-level annotations for any gene, combining GENCODE reference annotations with SQANTI PacBio long-read isoforms. Produces annotated TSVs, GTFs, FASTAs, and protein sequences with optional expression quantification and UniProt comparison.
-- **BAM Visualization Tools** — Extract gene regions from genome-aligned (hg38) PacBio BAMs into small, self-contained files with auto-generated IGV sessions and sashimi plot support.
+- **BAM Visualization Tools** — Extract gene regions from genome-aligned (hg38) BAMs into small, self-contained files with auto-generated IGV sessions and sashimi plot support. Includes separate scripts for long-read (PacBio) and short-read (junction-filtered) extraction.
 
 Developed for the NMD (Nonsense-Mediated Decay) lung cell line study but works with any GENCODE + SQANTI + PacBio dataset.
 
@@ -26,9 +26,13 @@ bash preprocess_sqanti_tabix.sh
 # 4. Annotate a gene (outputs to runs/MTCL1/)
 Rscript gene_isoform_annotation.R MTCL1 --gtf --fasta --protein
 
-# 5. Extract BAMs for IGV (outputs to same runs/MTCL1/)
-bash extract_gene_region.sh --gene MTCL1 --gencode-gtf /path/to/gencode.gtf.gz \
+# 5. Extract long-read BAMs for IGV (outputs to same runs/MTCL1/)
+bash extract_longread_region.sh --gene MTCL1 --gencode-gtf /path/to/gencode.gtf.gz \
     --bam-dir /path/to/bams/ --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf
+
+# 6. (Optional) Extract short-read junction BAMs
+bash extract_shortread_junctions.sh --gene MTCL1 --gencode-gtf /path/to/gencode.gtf.gz \
+    --bam-dir /path/to/shortread/results/ --bam-suffix .markdup.bam
 ```
 
 All outputs land in `runs/MTCL1/` by default. Use `--output-dir <path>` to override.
@@ -51,7 +55,8 @@ All outputs land in `runs/MTCL1/` by default. Use `--output-dir <path>` to overr
   - [Sample Output](#sample-output)
 - [BAM Visualization & IGV Sessions](#bam-visualization--igv-sessions)
   - [Quick Start](#quick-start-1)
-  - [extract_gene_region.sh](#extract_gene_regionsh)
+  - [extract_longread_region.sh](#extract_longread_regionsh)
+  - [extract_shortread_junctions.sh](#extract_shortread_junctionssh)
   - [Sashimi Plots with ggsashimi](#sashimi-plots-with-ggsashimi)
 - [Reference](#reference)
   - [How the Annotation Pipeline Works](#how-the-annotation-pipeline-works)
@@ -151,7 +156,7 @@ which tabix && which bgzip && echo "Tools installed!" || echo "Need to install h
 
 ##### samtools
 
-**Required for BAM visualization tools** (`extract_gene_region.sh`).
+**Required for BAM visualization tools** (`extract_longread_region.sh`, `extract_shortread_junctions.sh`).
 
 ```bash
 conda install -c bioconda samtools   # or: brew install samtools
@@ -478,19 +483,30 @@ runs/MTCL1/protein_sequences_MTCL1.fasta      # 42 protein sequences (1 UniProt 
 
 ## BAM Visualization & IGV Sessions
 
-Tools for visualizing genome-aligned (hg38) PacBio long-read BAMs in IGV and as sashimi plots. The `extract_gene_region.sh` script extracts gene regions from genome-aligned BAMs and produces small BAM slices with an IGV session file.
+Tools for extracting gene regions from genome-aligned (hg38) BAMs and visualizing them in IGV. Two scripts handle different sequencing platforms:
+
+- **`extract_longread_region.sh`** — PacBio long-read BAMs (full reads)
+- **`extract_shortread_junctions.sh`** — Short-read BAMs (junction-spanning reads only)
+
+Both scripts always produce **two output subdirectories**: `individual/` (per-sample BAMs) and `merged/` (cell_type × treatment merged BAMs). The IGV session references merged BAMs by default.
 
 ### Quick Start
 
 ```bash
-# Extract by gene name — outputs default to runs/MTCL1/
-bash extract_gene_region.sh --gene MTCL1 \
+# Extract long-read BAMs by gene name — outputs default to runs/MTCL1/
+bash extract_longread_region.sh --gene MTCL1 \
     --gencode-gtf /path/to/gencode.v49.annotation.gtf.gz \
     --bam-dir ../data/bams/genome_hg38/ \
     --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf
 
+# Extract short-read junction BAMs (recursive search for nfcore layout)
+bash extract_shortread_junctions.sh --gene MTCL1 \
+    --gencode-gtf /path/to/gencode.v49.annotation.gtf.gz \
+    --bam-dir /path/to/nfcore/results/ \
+    --bam-suffix .markdup.bam
+
 # Or extract by coordinates with explicit output dir
-bash extract_gene_region.sh --region chr18:8705271-8832780 \
+bash extract_longread_region.sh --region chr18:8705271-8832780 \
     --bam-dir ../data/bams/genome_hg38/ \
     --output-dir ./igv_genome/ \
     --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf
@@ -501,41 +517,34 @@ bash extract_gene_region.sh --region chr18:8705271-8832780 \
 
 **Dependencies:** `samtools` (required), `tabix` (only for `--gene` lookup)
 
-### extract_gene_region.sh
+### extract_longread_region.sh
 
-A portable shell script that extracts a gene region from genome-aligned BAMs into small, self-contained files suitable for IGV visualization.
+Extracts a gene region from genome-aligned PacBio long-read BAMs into small, self-contained files suitable for IGV visualization. Always produces both per-sample (`individual/`) and merged (`merged/`) BAMs.
 
 **Usage:**
 
 ```bash
 # Look up gene coordinates — outputs default to runs/MTCL1/
-bash extract_gene_region.sh --gene MTCL1 \
+bash extract_longread_region.sh --gene MTCL1 \
     --gencode-gtf /path/to/gencode.v49.annotation.gtf.gz \
     --bam-dir ../data/bams/genome_hg38/ \
     --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf
 
 # Extract by genomic coordinates (requires --output-dir)
-bash extract_gene_region.sh --region chr18:8705271-8832780 \
+bash extract_longread_region.sh --region chr18:8705271-8832780 \
     --bam-dir ../data/bams/genome_hg38/ \
     --output-dir ./igv_genome/ \
     --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf
 
 # Extract specific BAM files
-bash extract_gene_region.sh --region chr18:8705271-8832780 \
+bash extract_longread_region.sh --region chr18:8705271-8832780 \
     --bam /path/to/sample1.bam --bam /path/to/sample2.bam \
     --output-dir ./igv_genome/
 
 # Adjust padding (default: 5000 bp on each side)
-bash extract_gene_region.sh --region chr18:8705271-8832780 \
+bash extract_longread_region.sh --region chr18:8705271-8832780 \
     --pad 10000 --bam-dir ../data/bams/genome_hg38/ \
     --output-dir ./igv_genome/
-
-# Merge BAMs by (cell_type, treatment) — ~12 tracks instead of 38
-bash extract_gene_region.sh --gene MTCL1 \
-    --gencode-gtf /path/to/gencode.v49.annotation.gtf.gz \
-    --bam-dir ../data/bams/genome_hg38/ \
-    --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf \
-    --merge-by-group
 ```
 
 **Options:**
@@ -550,41 +559,97 @@ bash extract_gene_region.sh --gene MTCL1 \
 | `--gtf FILE` | Gene annotation GTF to include in IGV session |
 | `--gencode-gtf FILE` | Bgzipped GENCODE GTF for `--gene` lookup |
 | `--pad N` | Padding around region in bp (default: 5000) |
-| `--merge-by-group` | Merge extracted BAMs by (cell_type, treatment) group for cleaner IGV sessions |
 | `--display-mode MODE` | IGV display mode: SQUISHED, EXPANDED, COLLAPSED (default: SQUISHED) |
 
 **Features:**
+- Always produces both `individual/` and `merged/` BAM subdirectories
 - Detects chromosome naming convention (`chr18` vs `18`) in BAM headers and adjusts queries automatically
 - Validates BAM indexes; creates them if missing
 - Warns when a BAM has 0 reads in the extracted region
-- Generates IGV session XML with tracks sorted by cell type, donor, treatment (DMSO before Smg1i)
+- Generates IGV session XML with tracks sorted by cell type, treatment (DMSO before Smg1i)
 - Produces small BAM slices (~30-50 KB per sample for a single gene, down from ~3-4 GB)
 
 **Output:**
 
 ```
-runs/MTCL1/                                   # Default when using --gene MTCL1
-├── Sample13_DD_017Q_DMSO.aligned.bam         # Extracted BAM slice
-├── Sample13_DD_017Q_DMSO.aligned.bam.bai     # BAM index
-├── Sample14_DD_017Q_Smg1i.aligned.bam
-├── Sample14_DD_017Q_Smg1i.aligned.bam.bai
+runs/MTCL1/
+├── individual/                                # Per-sample BAMs
+│   ├── Sample13_DD_017Q_DMSO.aligned.bam
+│   ├── Sample13_DD_017Q_DMSO.aligned.bam.bai
+│   ├── Sample14_DD_017Q_Smg1i.aligned.bam
+│   ├── Sample14_DD_017Q_Smg1i.aligned.bam.bai
+│   └── ...
+├── merged/                                    # Cell_type × treatment merged BAMs
+│   ├── DD_DMSO.aligned.bam                    # Merged: all DD DMSO donors
+│   ├── DD_DMSO.aligned.bam.bai
+│   ├── DD_Smg1i.aligned.bam
+│   ├── DD_Smg1i.aligned.bam.bai
+│   └── ...                                    # ~12 merged BAMs total
 ├── gene_annotation.gtf                        # Copied from --gtf
-└── igv_session.xml                            # Open in IGV
+└── igv_session.xml                            # References merged/ BAMs, labeled "DD DMSO (n=3)"
 ```
 
-With `--merge-by-group`, individual BAMs are merged by (cell_type, treatment):
+### extract_shortread_junctions.sh
+
+Extracts junction-spanning reads (CIGAR `N` operations) from short-read BAMs for a genomic region. Designed for nfcore-rnaseq output but works with any short-read BAMs. Same dual-output structure as the long-read script.
+
+**Usage:**
+
+```bash
+# Recursive search for nfcore-rnaseq BAMs
+bash extract_shortread_junctions.sh --gene MTCL1 \
+    --gencode-gtf /path/to/gencode.v49.annotation.gtf.gz \
+    --bam-dir /path/to/nfcore/results/ \
+    --bam-suffix .markdup.bam
+
+# Extract by coordinates with custom suffix
+bash extract_shortread_junctions.sh --region chr18:8705271-8832780 \
+    --bam-dir /path/to/bams/ \
+    --bam-suffix .sorted.bam \
+    --output-dir ./sr_junctions/
+
+# Extract specific BAMs
+bash extract_shortread_junctions.sh --region chr18:8705271-8832780 \
+    --bam /path/to/sample1.markdup.bam --bam /path/to/sample2.markdup.bam \
+    --output-dir ./sr_junctions/
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--region CHR:START-END` | Genomic region (e.g., `chr18:8705271-8832780`) |
+| `--gene GENE_NAME` | Gene name lookup (requires `--gencode-gtf`) |
+| `--bam-dir DIR` | Directory to search **recursively** for BAM files |
+| `--bam FILE` | Specific BAM file (repeatable) |
+| `--bam-suffix SUFFIX` | BAM filename suffix to match (default: `.markdup.bam`) |
+| `--sample-regex REGEX` | Regex for sample name parsing (default: `^Sample[0-9]+_(.+)_(DMSO\|Smg1i)$`) |
+| `--output-dir DIR` | Output directory (default: `runs/<GENE>/` when `--gene` is used) |
+| `--gtf FILE` | Gene annotation GTF to include in IGV session |
+| `--gencode-gtf FILE` | Bgzipped GENCODE GTF for `--gene` lookup |
+| `--pad N` | Padding around region in bp (default: 5000) |
+| `--display-mode MODE` | IGV display mode: SQUISHED, EXPANDED, COLLAPSED (default: SQUISHED) |
+
+**Key differences from long-read script:**
+- **Junction filtering**: Only retains reads with splice junctions (`N` in CIGAR). Uses `samtools view -e 'cigar =~ "N"'` for samtools >= 1.12, with an awk fallback for older versions.
+- **Recursive BAM discovery**: `--bam-dir` searches recursively to handle nfcore-rnaseq subdirectory layouts (`*/star_salmon/*.markdup.bam`)
+- **Configurable suffix**: `--bam-suffix` (default `.markdup.bam`) controls which files are matched
+- **Output suffix**: `.junction.bam` instead of `.aligned.bam`
+
+**Output:**
 
 ```
-runs/MTCL1/                                   # --merge-by-group output
-├── AT2_DMSO.aligned.bam                      # Merged: all AT2 DMSO donors
-├── AT2_DMSO.aligned.bam.bai
-├── AT2_Smg1i.aligned.bam                     # Merged: all AT2 Smg1i donors
-├── AT2_Smg1i.aligned.bam.bai
-├── DD_DMSO.aligned.bam
-├── DD_DMSO.aligned.bam.bai
-├── ...                                        # ~12 merged BAMs total
+runs/MTCL1/
+├── individual/
+│   ├── Sample1_DD_017Q_DMSO.junction.bam
+│   ├── Sample1_DD_017Q_DMSO.junction.bam.bai
+│   └── ...
+├── merged/
+│   ├── DD_DMSO.junction.bam
+│   ├── DD_DMSO.junction.bam.bai
+│   └── ...
 ├── gene_annotation.gtf
-└── igv_session.xml                            # Tracks labeled "DD DMSO (n=3)"
+└── igv_session.xml
 ```
 
 ### Sashimi Plots with ggsashimi
@@ -993,6 +1058,11 @@ If you use this pipeline in your research, please cite:
 ---
 
 ## Version History
+
+- **v4.0** (2026-03-01)
+  - Renamed `extract_gene_region.sh` → `extract_longread_region.sh`; always produces both `individual/` and `merged/` subdirectories (removed `--merge-by-group` flag)
+  - Added `extract_shortread_junctions.sh`: junction-filtered BAM extraction from short-read data with recursive BAM discovery, samtools version-aware CIGAR filtering, and `--bam-suffix` flag
+  - Added MTCL1 cryptic exon report (`MTCL1/mtcl1_cryptic_exon_report_2026.3.1.Rmd`) with rMATS cross-platform validation and optional short-read junction analysis sections
 
 - **v3.4** (2026-02-27)
   - Added `--merge-by-group` flag to `extract_gene_region.sh`: merges extracted BAMs by (cell_type, treatment) group for cleaner IGV sessions (~12 tracks instead of 38)

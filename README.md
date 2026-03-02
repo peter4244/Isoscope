@@ -194,8 +194,8 @@ This script will:
 **Time:** ~10-15 minutes (one-time setup)
 
 **Output files:**
-- `/path/to/gencode.v49.primary_assembly.annotation.chrnamesedited.sorted.gtf.gz` (+ `.tbi` index)
-- `/path/to/sqanti3_corrected.sorted.gtf.gz` (+ `.tbi` index)
+- `/path/to/gencode.v49.primary_assembly.annotation.sorted.gtf.gz` (+ `.tbi` index)
+- `/path/to/<prefix>_corrected.sorted.gtf.gz` (+ `.tbi` index)
 
 ### Required Files
 
@@ -324,7 +324,7 @@ The pipeline uses tabix-indexed GTF files for fast coordinate-based queries:
 
 Expression calculation is controlled by settings in `config.R`:
 
-- `TRANSCRIPT_ID_COLUMN` - Column in `DGEList$genes` containing transcript IDs (default: `"txid"`)
+- `TRANSCRIPT_ID_COLUMN` - Column in `DGEList$genes` containing transcript IDs (default: `"transcript_id"`)
 - `STRATIFY_BY` - Columns in `DGEList$samples` to stratify expression by:
   - `NULL` → no stratification: `expr_mean`, `total_reads_mean`
   - `c("treatment")` → one-way: `expr_DMSO`, `expr_Smg1i`, ...
@@ -754,7 +754,7 @@ When the `--protein` flag is used, the pipeline performs CDS translation and com
 
 **Translation sources (in order of priority):**
 - **GENCODE isoforms**: CDS features from GTF mapped to transcript coordinates, then translated via `Biostrings::translate()`
-- **SQANTI isoforms**: CDS features from SQANTI GTF if available, otherwise falls back to pre-translated ORFs from `sqanti3_corrected.faa`
+- **SQANTI isoforms**: CDS features from SQANTI GTF if available, otherwise falls back to pre-translated ORFs from the SQANTI protein FASTA (`.faa`)
 
 **UniProt comparison columns added to TSV:**
 - `frame_matches_uniprot` - TRUE if exact match or perfect substring of canonical
@@ -916,7 +916,7 @@ USER INPUT
 |   - Fetch UniProt canonical sequence (API or local file)       |
 |   - Translate CDS for all protein-coding isoforms:             |
 |     - GENCODE: GTF CDS -> transcript coords -> translate       |
-|     - SQANTI: GTF CDS or sqanti3_corrected.faa fallback        |
+|     - SQANTI: GTF CDS or protein FASTA (.faa) fallback          |
 |   - Compare each protein to UniProt canonical:                 |
 |     - Exact/subset match (frame_matches_uniprot)               |
 |     - Sliding 20-aa window match % (match_pct_uniprot)         |
@@ -1033,7 +1033,7 @@ This is normal:
 ### Performance Issues
 
 **Script taking longer than expected?**
-1. Check if tabix preprocessing was done: `ls sqanti3_corrected.sorted.gtf.gz.tbi`
+1. Check if tabix preprocessing was done: `ls *_corrected.sorted.gtf.gz.tbi`
 2. Monitor system resources: `top` or `htop`
 3. Large genes (>50 isoforms) take longer
 4. Expression calculation adds ~15-30 seconds - use `--no-expr` if not needed

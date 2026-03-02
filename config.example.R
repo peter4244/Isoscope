@@ -5,14 +5,14 @@
 # All paths must be absolute. See README.md for file descriptions.
 
 # GENCODE reference files (gene lookup file ships with the repo — no config needed)
-GENCODE_GTF_INDEXED   <- "/path/to/gencode.v49.primary_assembly.annotation.chrnamesedited.sorted.gtf.gz"
+GENCODE_GTF_INDEXED   <- "/path/to/gencode.v49.primary_assembly.annotation.sorted.gtf.gz"
 GENCODE_FASTA         <- "/path/to/gencode.v49.transcripts.fa.gz"
 
 # SQANTI PacBio files
-SQANTI_CLASSIFICATION <- "/path/to/sqanti3_classification.txt"
-SQANTI_GTF_INDEXED    <- "/path/to/sqanti3_corrected.sorted.gtf.gz"
-SQANTI_FASTA          <- "/path/to/merged_collapsed.fa.gz"
-SQANTI_PROTEIN_FASTA  <- "/path/to/sqanti3_corrected.faa"
+SQANTI_CLASSIFICATION <- "/path/to/nmd_lungcells_classification.txt"
+SQANTI_GTF_INDEXED    <- "/path/to/nmd_lungcells_corrected.sorted.gtf.gz"
+SQANTI_FASTA          <- "/path/to/nmd_lungcells_corrected.fasta.gz"
+SQANTI_PROTEIN_FASTA  <- "/path/to/nmd_lungcells_corrected.faa"
 
 # Expression data (not needed with --no-expr)
 DGELIST_RDS           <- "/path/to/dge_isoform.rds"
@@ -20,7 +20,7 @@ DGELIST_RDS           <- "/path/to/dge_isoform.rds"
 # === Expression settings (used by Step 4, ignored with --no-expr) ===
 
 # Column in DGEList$genes containing transcript IDs
-TRANSCRIPT_ID_COLUMN <- "txid"
+TRANSCRIPT_ID_COLUMN <- "transcript_id"
 
 # Columns in DGEList$samples to stratify expression by.
 #   NULL            -> no stratification: expr_mean, total_reads

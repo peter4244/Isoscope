@@ -13,13 +13,12 @@ if [[ ! -f "${SCRIPT_DIR}/config.sh" ]]; then
 fi
 source "${SCRIPT_DIR}/config.sh"
 
-# Derived paths (from GENCODE_GTF and SQANTI_DIR)
+# Derived paths (from GENCODE_GTF and SQANTI_GTF)
 GENCODE_SORTED="${GENCODE_GTF%.gtf}.sorted.gtf"
 GENCODE_GZ="${GENCODE_GTF%.gtf}.sorted.gtf.gz"
 
-SQANTI_GTF="${SQANTI_DIR}/sqanti3_corrected.gtf"
-SQANTI_SORTED="${SQANTI_DIR}/sqanti3_corrected.sorted.gtf"
-SQANTI_GZ="${SQANTI_DIR}/sqanti3_corrected.sorted.gtf.gz"
+SQANTI_SORTED="${SQANTI_GTF%.gtf}.sorted.gtf"
+SQANTI_GZ="${SQANTI_GTF%.gtf}.sorted.gtf.gz"
 
 # Check if input files exist
 if [ ! -f "$GENCODE_GTF" ]; then

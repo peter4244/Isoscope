@@ -5,7 +5,7 @@
 # Only two paths are needed; sorted/compressed files are derived automatically.
 
 # Unindexed GENCODE GTF (the script will create .sorted.gtf.gz and .sorted.gtf.gz.tbi next to it)
-GENCODE_GTF="/path/to/gencode.v49.primary_assembly.annotation.chrnamesedited.gtf"
+GENCODE_GTF="/path/to/gencode.v49.primary_assembly.annotation.gtf"
 
-# SQANTI output directory (must contain sqanti3_corrected.gtf)
-SQANTI_DIR="/path/to/sqanti_runs/isoseq_sqanti3_filtered"
+# SQANTI corrected GTF (the script will create .sorted.gtf.gz and .sorted.gtf.gz.tbi next to it)
+SQANTI_GTF="/path/to/nmd_lungcells_corrected.gtf"

@@ -99,8 +99,8 @@ exon_type_colors <- c("CDS" = "#2C3E50", "exon" = "#85929E")
 
 # BAM → DGE cell type mapping
 ct_to_dge <- c(
-  "AT" = "at2", "DD" = "dd", "DD_ALI" = "ddali",
-  "DO" = "doali", "FB" = "fb", "MV" = "mv"
+  "AT" = "at", "DD" = "dd", "DD_ALI" = "ddali",
+  "DO" = "do", "FB" = "fb", "MV" = "mv"
 )
 
 # rMATS data source and cell type mapping
@@ -157,11 +157,11 @@ all_bam_candidates <- unlist(lapply(bam_search_dirs, function(d) {
 }))
 
 # Prefer individual/ BAMs for per-sample data; fall back to flat layout
-individual_bams <- grep("/individual/", all_bam_candidates, value = TRUE)
+individual_bams <- grep("individual/", all_bam_candidates, value = TRUE)
 flat_bams <- grep("^\\./[^/]+$", all_bam_candidates, value = TRUE)
 bam_files <- if (length(individual_bams) > 0) individual_bams else flat_bams
 # Exclude merged BAMs to avoid double-counting
-bam_files <- bam_files[!grepl("/merged/", bam_files)]
+bam_files <- bam_files[!grepl("merged/", bam_files)]
 
 process_bam <- function(bam_path) {
   # Parse cell type, treatment, and sample_id from filename
@@ -279,18 +279,18 @@ read_counts <- all_reads %>%
 ## Load DGE results
 
 ```{r load-dge}
-dge_files <- list.files("../../longread_dge", pattern = "nmd_dge_.*_2026\\.1\\.18\\.csv",
+dge_files <- list.files("../../isocall_dge", pattern = "nmd_isocall_dge_.*_2026\\.3\\.1\\.csv",
                         full.names = TRUE)
 
 load_dge <- function(path) {
-  ct_code <- str_extract(basename(path), "(?<=nmd_dge_)[a-z0-9]+(?=_)")
+  ct_code <- str_extract(basename(path), "(?<=nmd_isocall_dge_)[a-z0-9]+(?=_)")
   ct_label <- names(ct_to_dge)[ct_to_dge == ct_code]
   if (length(ct_label) != 1) return(tibble())
   df <- read_csv(path, show_col_types = FALSE)
   df %>%
-    filter(hgnc_id == "MTCL1") %>%
-    select(any_of(c("txid", "transcript.gc", "biotype", "logFC", "AveExpr",
-                     "P.Value", "adj.P.Val", "B"))) %>%
+    filter(gene_name == "MTCL1") %>%
+    select(any_of(c("transcript_id", "gene_name", "logFC", "CI.L", "CI.R",
+                     "AveExpr", "P.Value", "adj.P.Val", "B"))) %>%
     mutate(cell_type = ct_label)
 }
 

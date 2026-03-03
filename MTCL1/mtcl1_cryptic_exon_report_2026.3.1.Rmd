@@ -976,14 +976,16 @@ if (n_sig > 0) {
 }
 ))
 
-cat("\n\n**Limitations of short-read comparison:**\n\n")
-cat("- rMATS can only assess **exon 10a** as a simple skipped exon; exon 10b and multi-exon ")
-cat("structures (S2, S3, S4) are not detectable from junction counts alone.\n")
-cat("- Short-read PSI is junction-count-based, while long-read inclusion is read-spanning-based; ")
-cat("these denominators are not directly comparable.\n")
-cat("- The reading frame classification (PTC status) confirmed in the long-read analysis ")
-cat("cannot be determined from short-read splicing data alone.\n")
 ```
+
+**Limitations of short-read comparison:**
+
+- rMATS can only assess **exon 10a** as a simple skipped exon; exon 10b and multi-exon
+  structures (S2, S3, S4) are not detectable from junction counts alone.
+- Short-read PSI is junction-count-based, while long-read inclusion is read-spanning-based;
+  these denominators are not directly comparable.
+- The reading frame classification (PTC status) confirmed in the long-read analysis
+  cannot be determined from short-read splicing data alone.
 
 ## Short-read junction read analysis {.tabset}
 
@@ -1711,12 +1713,12 @@ cat(sprintf("- **S3 (9→[10a...10b]→11)**: Retained intron (410 bp, 410%%3 = 
 cat(sprintf("In total, **%d of 3** spliced cryptic exon structures contain a PTC. ", n_ptc_structures))
 cat("All PTCs are located thousands of nucleotides upstream of the last exon–exon junction, ")
 cat("satisfying the **50-nt rule** for NMD substrate recognition.\n\n")
-
-cat("**Note on MTCL1-208**: GENCODE's NMD-annotated isoform (MTCL1-208) uses a different CDS start ")
-cat("(8,783,587 vs. the canonical 8,705,661) and its PTC at genomic position 8,796,309 is upstream ")
-cat("of the cryptic exon region. The novel structures S1–S4 use the canonical CDS start, so their ")
-cat("NMD-triggering mechanism is independent of MTCL1-208's.\n")
 ```
+
+**Note on MTCL1-208**: GENCODE's NMD-annotated isoform (MTCL1-208) uses a different CDS start
+(8,783,587 vs. the canonical 8,705,661) and its PTC at genomic position 8,796,309 is upstream
+of the cryptic exon region. The novel structures S1–S4 use the canonical CDS start, so their
+NMD-triggering mechanism is independent of MTCL1-208's.
 
 ## Cell-type specificity
 
@@ -1743,8 +1745,9 @@ if (length(underpowered_cts) > 0) {
               paste(underpowered_cts, collapse = ", ")))
 }
 
-cat("The pooled analysis across all cell types provides the most robust estimate of PTC enrichment (see Figure 9).\n")
 ```
+
+The pooled analysis across all cell types provides the most robust estimate of PTC enrichment (see Figure 9).
 
 ## Limitations
 

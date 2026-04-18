@@ -4,15 +4,25 @@
 #
 # All paths must be absolute. See README.md for file descriptions.
 
+# Long-read source type:
+#   "sqanti"  (default) -- SQANTI-corrected + classification available
+#   "isocall"           -- pre-SQANTI isocall GTF only (no classification)
+#
+# In isocall mode, SQANTI_CLASSIFICATION is not required; isoforms are
+# enumerated directly from SQANTI_GTF_INDEXED (which should point at the
+# tabix-indexed isocall GTF). structural_category is set to
+# "isocall_uncorrected" and CDS / ORF fields default to NA.
+SOURCE_KIND           <- "sqanti"
+
 # GENCODE reference files (gene lookup file ships with the repo — no config needed)
 GENCODE_GTF_INDEXED   <- "/path/to/gencode.v49.primary_assembly.annotation.sorted.gtf.gz"
 GENCODE_FASTA         <- "/path/to/gencode.v49.transcripts.fa.gz"
 
-# SQANTI PacBio files
-SQANTI_CLASSIFICATION <- "/path/to/nmd_lungcells_classification.txt"
-SQANTI_GTF_INDEXED    <- "/path/to/nmd_lungcells_corrected.sorted.gtf.gz"
-SQANTI_FASTA          <- "/path/to/nmd_lungcells_corrected.fasta.gz"
-SQANTI_PROTEIN_FASTA  <- "/path/to/nmd_lungcells_corrected.faa"
+# Long-read isoform files (SQANTI output or isocall output, per SOURCE_KIND)
+SQANTI_CLASSIFICATION <- "/path/to/nmd_lungcells_classification.txt"       # sqanti mode only
+SQANTI_GTF_INDEXED    <- "/path/to/nmd_lungcells_corrected.sorted.gtf.gz"  # either mode
+SQANTI_FASTA          <- "/path/to/nmd_lungcells_corrected.fasta.gz"       # optional
+SQANTI_PROTEIN_FASTA  <- "/path/to/nmd_lungcells_corrected.faa"            # optional
 
 # Expression data (not needed with --no-expr)
 DGELIST_RDS           <- "/path/to/dge_isoform.rds"

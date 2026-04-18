@@ -499,16 +499,28 @@ message(paste("Gene:", GENE_INPUT))
 message(paste("Date:", Sys.Date()))
 message("")
 
+# Default SOURCE_KIND for backward compatibility (configs that don't set it
+# get the original SQANTI-based pipeline).
+if (!exists("SOURCE_KIND") || is.null(SOURCE_KIND) || !nzchar(SOURCE_KIND)) {
+  SOURCE_KIND <- "sqanti"
+}
+if (!SOURCE_KIND %in% c("sqanti", "isocall")) {
+  stop("SOURCE_KIND must be 'sqanti' or 'isocall' (got '", SOURCE_KIND, "')")
+}
+
 # Check required files
 message("Checking required files...")
 files_to_check <- c(
   "GENCODE gene lookup" = GENCODE_GENE_LOOKUP,
   "GENCODE GTF (indexed)" = GENCODE_GTF_INDEXED,
   "GENCODE GTF index" = paste0(GENCODE_GTF_INDEXED, ".tbi"),
-  "SQANTI GTF (indexed)" = SQANTI_GTF_INDEXED,
-  "SQANTI GTF index" = paste0(SQANTI_GTF_INDEXED, ".tbi"),
-  "SQANTI Classification" = SQANTI_CLASSIFICATION
+  "Long-read GTF (indexed)" = SQANTI_GTF_INDEXED,
+  "Long-read GTF index" = paste0(SQANTI_GTF_INDEXED, ".tbi")
 )
+# SQANTI classification is only needed when SOURCE_KIND == "sqanti"
+if (SOURCE_KIND == "sqanti") {
+  files_to_check["SQANTI Classification"] <- SQANTI_CLASSIFICATION
+}
 
 if (INCLUDE_EXPRESSION) {
   files_to_check["DGEList RDS"] <- DGELIST_RDS
@@ -724,54 +736,116 @@ message(paste("  Extracted", nrow(gencode_results), "GENCODE isoforms with full 
 message("")
 
 # =============================================================================
-# STEP 3: EXTRACT SQANTI ISOFORMS
+# STEP 3: EXTRACT LONG-READ ISOFORMS
+#
+# When SOURCE_KIND == "sqanti" (default), isoform metadata comes from the
+# SQANTI classification table. When SOURCE_KIND == "isocall", the
+# classification file is not available, and we enumerate this gene's
+# isoforms directly from the long-read GTF; categorical fields default
+# to NA (or "isocall_uncorrected" for structural_category).
 # =============================================================================
 
+LR_SOURCE_LABEL <- if (SOURCE_KIND == "sqanti") "SQANTI" else "ISOCALL"
+
 message("====================================================================")
-message("STEP 3: Extracting SQANTI isoforms")
+message("STEP 3: Extracting ", LR_SOURCE_LABEL, " isoforms")
 message("====================================================================")
-
-# Part A: Get isoform metadata from SQANTI classification
-message("  Loading SQANTI classification...")
-temp_sqanti <- tempfile(fileext = ".txt")
-system(paste0("head -1 ", SQANTI_CLASSIFICATION, " > ", temp_sqanti))
-system(paste0("grep '", gene_id, "' ", SQANTI_CLASSIFICATION, " >> ", temp_sqanti))
-
-sqanti_class <- read_tsv(temp_sqanti, show_col_types = FALSE)
-unlink(temp_sqanti)
-
-sqanti_target <- sqanti_class %>%
-  filter(grepl(paste0("\\b", gene_id, "\\b"), associated_gene, ignore.case = TRUE))
-
-message(paste("  Found", nrow(sqanti_target), "SQANTI isoforms"))
 
 sqanti_results <- data.frame()
 sqanti_features <- NULL
 
-if (nrow(sqanti_target) > 0) {
-  # Part B: Get exon structures from tabix-indexed SQANTI GTF
-  message("  Querying tabix-indexed SQANTI GTF for exon structures...")
+if (SOURCE_KIND == "sqanti") {
+  # Part A (SQANTI mode): Get isoform metadata from SQANTI classification
+  message("  Loading SQANTI classification...")
+  temp_sqanti <- tempfile(fileext = ".txt")
+  system(paste0("head -1 ", SQANTI_CLASSIFICATION, " > ", temp_sqanti))
+  system(paste0("grep '", gene_id, "' ", SQANTI_CLASSIFICATION, " >> ", temp_sqanti))
 
-  # Query tabix by gene coordinates
+  sqanti_class <- read_tsv(temp_sqanti, show_col_types = FALSE)
+  unlink(temp_sqanti)
+
+  sqanti_target <- sqanti_class %>%
+    filter(grepl(paste0("\\b", gene_id, "\\b"), associated_gene, ignore.case = TRUE))
+
+  message(paste("  Found", nrow(sqanti_target), "SQANTI isoforms"))
+
+} else {
+  # Part A (isocall mode): Enumerate transcripts directly from the GTF.
+  message("  (isocall mode) Enumerating transcripts from long-read GTF...")
   tabix_cmd <- sprintf("tabix %s %s:%d-%d", SQANTI_GTF_INDEXED, gene_chr, gene_start, gene_end)
-  sqanti_lines <- system(tabix_cmd, intern = TRUE)
+  lr_lines <- system(tabix_cmd, intern = TRUE)
 
-  if (length(sqanti_lines) > 0) {
-    message(paste("    Retrieved", length(sqanti_lines), "GTF lines"))
-
-    # Parse tabix output into GRanges
+  if (length(lr_lines) > 0) {
     temp_gtf <- tempfile(fileext = ".gtf")
-    writeLines(sqanti_lines, temp_gtf)
+    writeLines(lr_lines, temp_gtf)
     sqanti_features <- import(temp_gtf)
     unlink(temp_gtf)
 
-    message("    Parsed SQANTI GTF features")
+    tx <- sqanti_features[sqanti_features$type == "transcript"]
+    gid_short <- sub("\\..*$", "", gene_id)
+    tx_gids   <- sub("\\..*$", "", as.character(tx$gene_id))
+    keep_tx   <- tx_gids == gid_short
+    if (sum(keep_tx) == 0 && !is.null(GENE_NAME) && nzchar(GENE_NAME) &&
+        !is.null(tx$gene_name)) {
+      keep_tx <- !is.na(tx$gene_name) & tx$gene_name == GENE_NAME
+    }
+    tx_match <- tx[keep_tx]
+
+    # Per-transcript length + n_exons (computed from exon records).
+    ex_all    <- sqanti_features[sqanti_features$type == "exon"]
+    ex_gids   <- sub("\\..*$", "", as.character(ex_all$gene_id))
+    ex_ours   <- ex_all[ex_gids == gid_short]
+    if (length(ex_ours) == 0 && !is.null(GENE_NAME) && nzchar(GENE_NAME) &&
+        !is.null(ex_all$gene_name)) {
+      ex_ours <- ex_all[!is.na(ex_all$gene_name) & ex_all$gene_name == GENE_NAME]
+    }
+    tx_len <- tapply(width(ex_ours),         as.character(ex_ours$transcript_id), sum)
+    tx_nex <- table(                          as.character(ex_ours$transcript_id))
+
+    tids <- as.character(tx_match$transcript_id)
+    sqanti_target <- data.frame(
+      isoform               = tids,
+      chrom                 = as.character(seqnames(tx_match)),
+      strand                = as.character(strand(tx_match)),
+      length                = as.integer(tx_len[tids]),
+      exons                 = as.integer(tx_nex[tids]),
+      structural_category   = "isocall_uncorrected",
+      subcategory           = NA_character_,
+      associated_gene       = as.character(tx_match$gene_id),
+      associated_transcript = NA_character_,
+      CDS_length            = NA_integer_,
+      ORF_length            = NA_integer_,
+      coding                = NA_character_,
+      stringsAsFactors      = FALSE
+    )
   } else {
-    message("    No SQANTI features found in gene region")
+    sqanti_target <- data.frame()
+  }
+  message(paste("  Found", nrow(sqanti_target), "ISOCALL isoforms"))
+}
+
+if (nrow(sqanti_target) > 0) {
+  # Part B: Get exon structures from the tabix-indexed long-read GTF
+  # (skip if we already imported the features in isocall mode).
+  if (is.null(sqanti_features)) {
+    message("  Querying tabix-indexed long-read GTF for exon structures...")
+    tabix_cmd <- sprintf("tabix %s %s:%d-%d", SQANTI_GTF_INDEXED, gene_chr, gene_start, gene_end)
+    sqanti_lines <- system(tabix_cmd, intern = TRUE)
+
+    if (length(sqanti_lines) > 0) {
+      message(paste("    Retrieved", length(sqanti_lines), "GTF lines"))
+      temp_gtf <- tempfile(fileext = ".gtf")
+      writeLines(sqanti_lines, temp_gtf)
+      sqanti_features <- import(temp_gtf)
+      unlink(temp_gtf)
+      message("    Parsed long-read GTF features")
+    } else {
+      message("    No long-read features found in gene region")
+    }
   }
 
-  # Process each SQANTI isoform
-  message("  Extracting SQANTI isoform annotations...")
+  # Process each long-read isoform
+  message("  Extracting ", LR_SOURCE_LABEL, " isoform annotations...")
   sqanti_result_list <- vector("list", nrow(sqanti_target))
   for (i in seq_len(nrow(sqanti_target))) {
     row <- sqanti_target[i, ]
@@ -783,8 +857,10 @@ if (nrow(sqanti_target) > 0) {
     cds_info <- list(has_cds = FALSE, cds_start = NA, cds_end = NA, cds_length_nt = NA, cds_length_aa = NA)
 
     if (!is.null(sqanti_features)) {
-      # Check if this isoform is in the GTF
-      tx_features <- sqanti_features[sqanti_features$transcript_id == pb_id]
+      # Check if this isoform is in the GTF. Use which() so NA
+      # transcript_ids (present on gene-level records in isocall GTFs)
+      # don't poison the logical subscript.
+      tx_features <- sqanti_features[which(sqanti_features$transcript_id == pb_id)]
 
       if (length(tx_features) > 0) {
         exon_info <- get_exon_structure_simple(sqanti_features, pb_id)
@@ -819,7 +895,7 @@ if (nrow(sqanti_target) > 0) {
     sqanti_result_list[[i]] <- data.frame(
       isoform_id = pb_id,
       isoform_name = pb_id,
-      source = "SQANTI",
+      source = LR_SOURCE_LABEL,
       chromosome = row$chrom,
       strand = row$strand,
       tss = tss_tes$tss,
@@ -842,7 +918,7 @@ if (nrow(sqanti_target) > 0) {
   }
   sqanti_results <- bind_rows(sqanti_result_list)
 
-  message(paste("  Extracted", nrow(sqanti_results), "SQANTI isoforms"))
+  message(paste("  Extracted", nrow(sqanti_results), LR_SOURCE_LABEL, "isoforms"))
 }
 
 message("")
@@ -1308,7 +1384,8 @@ message(paste("Gene:", GENE_NAME, "(", gene_id, ")"))
 message("")
 message("Isoform counts:")
 message(paste("  GENCODE:", sum(all_isoforms$source == "GENCODE")))
-message(paste("  SQANTI:", sum(all_isoforms$source == "SQANTI")))
+message(paste0("  ", LR_SOURCE_LABEL, ": ",
+               sum(all_isoforms$source == LR_SOURCE_LABEL)))
 message(paste("  Total:", nrow(all_isoforms)))
 message("")
 message(paste("  Protein coding:", sum(all_isoforms$is_protein_coding, na.rm = TRUE)))

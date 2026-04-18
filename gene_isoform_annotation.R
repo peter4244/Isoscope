@@ -65,6 +65,7 @@ if (length(args) == 0) {
   cat("\nArguments:\n")
   cat("  GENE_NAME_OR_ID    Gene name (e.g., MTCL1) or Ensembl ID (e.g., ENSG00000168502)\n")
   cat("\nOptions:\n")
+  cat("  --config <path>    Path to a config.R file (default: <script_dir>/config.R)\n")
   cat("  --gtf              Output GTF file with all isoforms\n")
   cat("  --fasta            Output FASTA file with isoform sequences\n")
   cat("  --protein          Output protein FASTA (translated CDS + Uniprot canonical)\n")
@@ -75,6 +76,7 @@ if (length(args) == 0) {
   cat("  Rscript gene_isoform_annotation.R MTCL1\n")
   cat("  Rscript gene_isoform_annotation.R MTCL1 --gtf --fasta --protein\n")
   cat("  Rscript gene_isoform_annotation.R ENSG00000168502 --no-expr\n")
+  cat("  Rscript gene_isoform_annotation.R MTCL1 --config /path/to/my_config.R\n")
   stop("No gene name or ID provided")
 }
 
@@ -116,6 +118,17 @@ if ("--output-dir" %in% args) {
   }
 }
 
+# Parse --config option (takes a value argument; defaults to <script_dir>/config.R)
+CONFIG_PATH_ARG <- NULL
+if ("--config" %in% args) {
+  cfg_idx <- which(args == "--config")
+  if (cfg_idx < length(args)) {
+    CONFIG_PATH_ARG <- args[cfg_idx + 1]
+  } else {
+    stop("ERROR: --config requires a file path argument")
+  }
+}
+
 # Determine if input is Ensembl ID or gene name
 if (grepl("^ENSG[0-9]+", GENE_INPUT)) {
   GENE_ID <- sub("\\..*", "", GENE_INPUT)  # Remove version if present
@@ -133,11 +146,14 @@ if (grepl("^ENSG[0-9]+", GENE_INPUT)) {
 
 # Note: OUTPUT_GTF, OUTPUT_FASTA, and INCLUDE_EXPRESSION are now set via command-line flags
 
-# Load file paths from config (copy config.example.R -> config.R and edit)
+# Load file paths from config. Default is <script_dir>/config.R; override
+# with --config <path> for callers that manage multiple source configs
+# (e.g. running isoscope per-study from a downstream tool).
 script_dir <- tryCatch(dirname(sys.frame(1)$ofile), error = function(e) ".")
-config_path <- file.path(script_dir, "config.R")
+config_path <- if (!is.null(CONFIG_PATH_ARG)) CONFIG_PATH_ARG else file.path(script_dir, "config.R")
 if (!file.exists(config_path)) {
-  stop("config.R not found. Copy config.example.R to config.R and edit paths for your system.")
+  stop("config file not found at '", config_path,
+       "'. Copy config.example.R to config.R (or pass --config <path>) and edit paths for your system.")
 }
 source(config_path)
 

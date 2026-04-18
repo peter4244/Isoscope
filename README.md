@@ -13,7 +13,7 @@ Developed for the NMD (Nonsense-Mediated Decay) lung cell line study but works w
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/peter4244/isoscope.git && cd isoscope
+git clone https://github.com/peter4244/Isoscope.git && cd Isoscope
 
 # 2. Activate the conda environment (create from environment.yml on first run)
 conda env create -f environment.yml    # first time only
@@ -163,7 +163,7 @@ conda install -c bioconda samtools   # or: brew install samtools
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/peter4244/isoscope.git && cd isoscope
+git clone https://github.com/peter4244/Isoscope.git && cd Isoscope
 
 # 2. Activate the conda environment (if using Option A)
 conda activate lr_igv

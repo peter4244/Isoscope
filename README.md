@@ -12,25 +12,28 @@ Developed for the NMD (Nonsense-Mediated Decay) lung cell line study but works w
 ## Quick Start
 
 ```bash
-# 1. Activate the shared conda environment
-conda activate /udd/repjc/.conda/envs/lr_igv
+# 1. Clone the repo
+git clone https://github.com/peter4244/isoscope.git && cd isoscope
 
-# 2. Clone the repo and configure
-git clone https://changit.bwh.harvard.edu/repjc/lr_igv_from_bam.git && cd lr_igv_from_bam
+# 2. Activate the conda environment (create from environment.yml on first run)
+conda env create -f environment.yml    # first time only
+conda activate lr_igv
+
+# 3. Configure
 cp config.example.R config.R    # edit paths for your system
 cp config.example.sh config.sh  # edit paths for your system
 
-# 3. One-time preprocessing (~10-15 min)
+# 4. One-time preprocessing (~10-15 min)
 bash preprocess_sqanti_tabix.sh
 
-# 4. Annotate a gene (outputs to runs/MTCL1/)
+# 5. Annotate a gene (outputs to runs/MTCL1/)
 Rscript gene_isoform_annotation.R MTCL1 --gtf --fasta --protein
 
-# 5. Extract long-read BAMs for IGV (outputs to same runs/MTCL1/)
+# 6. Extract long-read BAMs for IGV (outputs to same runs/MTCL1/)
 bash extract_longread_region.sh --gene MTCL1 --gencode-gtf /path/to/gencode.gtf.gz \
     --bam-dir /path/to/bams/ --gtf runs/MTCL1/isoform_annotation_MTCL1.gtf
 
-# 6. (Optional) Extract short-read junction BAMs
+# 7. (Optional) Extract short-read junction BAMs
 bash extract_shortread_junctions.sh --gene MTCL1 --gencode-gtf /path/to/gencode.gtf.gz \
     --bam-dir /path/to/shortread/results/ --bam-suffix .markdup.bam
 ```
@@ -81,17 +84,9 @@ All outputs land in `runs/MTCL1/` by default. Use `--output-dir <path>` to overr
 - **RAM**: 8 GB minimum, 16 GB recommended
 - **Disk**: ~5 GB for reference files
 
-#### Option A: Shared Conda Environment (Recommended)
+#### Option A: Conda Environment (Recommended)
 
-A shared conda environment is available on the cluster with R, all R packages, and command-line tools pre-installed:
-
-```bash
-conda activate /udd/repjc/.conda/envs/lr_igv
-```
-
-After activation, all R packages, `tabix`, `bgzip`, and `samtools` are available — skip to [Configuration](#configuration).
-
-**External users** (outside the cluster): create your own environment from the provided `environment.yml`:
+Create an environment from the provided `environment.yml` — this installs R, all R packages, `tabix`, `bgzip`, and `samtools`:
 
 ```bash
 conda config --set channel_priority strict
@@ -168,7 +163,7 @@ conda install -c bioconda samtools   # or: brew install samtools
 
 ```bash
 # 1. Clone the repo
-git clone https://changit.bwh.harvard.edu/repjc/lr_igv_from_bam.git && cd lr_igv_from_bam
+git clone https://github.com/peter4244/isoscope.git && cd isoscope
 
 # 2. Activate the conda environment (if using Option A)
 conda activate lr_igv
@@ -190,12 +185,14 @@ This script will:
 1. Create tabix-indexed version of GENCODE GTF (2.9 GB -> 140 MB compressed)
 2. Create tabix-indexed version of SQANTI GTF (1.0 GB -> 41 MB compressed)
 3. Generate tabix indices for fast coordinate lookups
+4. Build the gene-level lookup file (`gencode_v49_genes.gtf`, ~13 MB) used by `gene_isoform_annotation.R` for gene-name/Ensembl-ID resolution
 
 **Time:** ~10-15 minutes (one-time setup)
 
 **Output files:**
 - `/path/to/gencode.v49.primary_assembly.annotation.sorted.gtf.gz` (+ `.tbi` index)
 - `/path/to/<prefix>_corrected.sorted.gtf.gz` (+ `.tbi` index)
+- `gencode_v49_genes.gtf` (in the repo directory — not committed to git; regenerate via preprocessing)
 
 ### Required Files
 
@@ -409,8 +406,7 @@ Actual column names depend on `STRATIFY_BY` and `LEVEL_LABELS` in `config.R`. Wi
 - Represents splice sites between consecutive exons
 
 **Expression Values:**
-- `NA` - Isoform not detected in sequencing
-- `0` - Detected but not expressed
+- `0` - Either not detected in the DGEList (e.g., novel SQANTI isoforms absent from the count matrix, or GENCODE isoforms not in the DGEList) **or** zero raw counts in that sample group. The two cases are collapsed into `0` in the final TSV for convenience; the R script logs the number of isoforms missing from the DGEList per group during Step 4.
 - `>0` - Expressed; CPM values rounded to 2 sig figs
 
 #### GTF File (Optional)
@@ -1072,7 +1068,7 @@ If you use this pipeline in your research, please cite:
   - Default output directory is now `runs/<GENE>/`, keeping all gene-related files together
   - `extract_gene_region.sh` auto-defaults to `runs/<GENE>/` when `--gene` is used
   - Added Quick Start section to README for fast onboarding
-  - Shared conda environment at `/udd/repjc/.conda/envs/lr_igv` (cluster users no longer need to create their own)
+  - Documented a shared conda environment setup for cluster users
 
 - **v3.2** (2026-02-27)
   - Added `environment.yml` for reproducible conda setup (R, all R packages, htslib, samtools)
@@ -1130,4 +1126,4 @@ For questions or issues:
 
 ## License
 
-This pipeline was developed as part of the NMD research project. Please cite appropriately if used in publications.
+MIT License — see [LICENSE](LICENSE). Developed as part of the NMD research project; please cite appropriately if used in publications.

@@ -106,6 +106,16 @@ process_gtf "$GENCODE_GTF" "$GENCODE_SORTED" "$GENCODE_GZ" "GENCODE v49"
 # Process SQANTI GTF
 process_gtf "$SQANTI_GTF" "$SQANTI_SORTED" "$SQANTI_GZ" "SQANTI PacBio"
 
+# Build the gene-level lookup file used by gene_isoform_annotation.R
+GENE_LOOKUP="${SCRIPT_DIR}/gencode_v49_genes.gtf"
+if [ -f "$GENE_LOOKUP" ]; then
+    echo "Gene lookup file already exists: $GENE_LOOKUP (skipping)"
+else
+    echo "Building gene lookup file: $GENE_LOOKUP"
+    bash "${SCRIPT_DIR}/make_gene_lookup.sh" "$GENCODE_GTF" "$GENE_LOOKUP"
+fi
+echo ""
+
 echo "======================================================================"
 echo "SUCCESS! All GTF files have been preprocessed."
 echo "======================================================================"
@@ -113,6 +123,7 @@ echo ""
 echo "Output files:"
 ls -lh "$GENCODE_GZ" "${GENCODE_GZ}.tbi"
 ls -lh "$SQANTI_GZ" "${SQANTI_GZ}.tbi"
+ls -lh "$GENE_LOOKUP"
 echo ""
 echo "The gene_isoform_annotation.R script will now use these indexed files"
 echo "for fast (<1 second) queries."

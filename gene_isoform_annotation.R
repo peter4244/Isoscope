@@ -80,6 +80,14 @@ if (length(args) == 0) {
 
 GENE_INPUT <- args[1]
 
+# Validate gene identifier: letters, digits, period, hyphen, underscore only.
+# Covers HGNC symbols (MTCL1, HLA-DRB1, NKX2-1, C1orf43) and versioned Ensembl IDs.
+# Rejects anything that could inject regex metacharacters or shell syntax.
+if (!grepl("^[A-Za-z0-9._-]+$", GENE_INPUT)) {
+  stop(paste0("ERROR: gene identifier must contain only letters, digits, '.', '-', or '_' (got: '",
+              GENE_INPUT, "')"))
+}
+
 # Parse optional flags
 OUTPUT_GTF <- "--gtf" %in% args
 OUTPUT_FASTA <- "--fasta" %in% args
@@ -256,12 +264,15 @@ calculate_utr_lengths <- function(tss, tes, cds_start, cds_end, strand) {
     return(list(utr5_length = NA, utr3_length = NA))
   }
 
+  # Convention used here (see get_tss_tes): tss/tes are strand-oriented
+  # (5'/3' ends of the transcript), while cds_start <= cds_end are genomic bounds.
   if (strand == "+") {
-    # Plus strand: TSS < CDS_start < CDS_end < TES
+    # Plus strand: TSS (low) < CDS_start < CDS_end < TES (high)
     utr5_length <- max(0, cds_start - tss)
     utr3_length <- max(0, tes - cds_end)
   } else if (strand == "-") {
-    # Minus strand: TES < CDS_start < CDS_end < TSS
+    # Minus strand: TES (low) < CDS_start < CDS_end < TSS (high)
+    # (tss is at the high genomic coord; tes is at the low genomic coord)
     utr5_length <- max(0, tss - cds_end)
     utr3_length <- max(0, cds_start - tes)
   } else {
@@ -364,10 +375,11 @@ get_cds_transcript_coords <- function(exons, cds_features, strand) {
   return(list(tx_start = tx_cds_start, tx_end = tx_cds_end))
 }
 
-translate_cds <- function(transcript_seq, tx_cds_start, tx_cds_end) {
+translate_cds <- function(transcript_seq, tx_cds_start, tx_cds_end, isoform_id = NA) {
   # Extract CDS subsequence from transcript DNAString and translate to protein
   # transcript_seq: DNAString of the full transcript
   # tx_cds_start, tx_cds_end: 1-based transcript-relative CDS positions
+  # isoform_id: optional label for diagnostic messages on failure
   # Returns: AAString of protein sequence, or NA on failure
 
   tryCatch({
@@ -375,6 +387,9 @@ translate_cds <- function(transcript_seq, tx_cds_start, tx_cds_end) {
     protein <- Biostrings::translate(cds_seq)
     return(protein)
   }, error = function(e) {
+    warning(paste0("Translation failed for ",
+                   if (!is.na(isoform_id)) paste0("isoform '", isoform_id, "': ") else "",
+                   conditionMessage(e)), call. = FALSE)
     return(NA)
   })
 }
@@ -534,18 +549,20 @@ message("====================================================================")
 message("STEP 1: Finding gene in GENCODE")
 message("====================================================================")
 
+# Read the gene lookup file once (pre-filtered to gene features by make_gene_lookup.sh;
+# ~60k lines for GENCODE v49). Using R-native fixed-string grep avoids a shell pipeline.
+gene_lookup_lines <- readLines(GENCODE_GENE_LOOKUP)
+
 if (SEARCH_BY == "name") {
   message(paste("  Searching by gene name:", GENE_NAME))
-  gene_lines <- system(
-    paste0("grep 'gene_name \"", GENE_NAME, "\"' ", GENCODE_GENE_LOOKUP,
-           " | awk -F'\\t' '$3 == \"gene\"'"),
-    intern = TRUE
-  )
+  pattern <- paste0('gene_name "', GENE_NAME, '"')
+  match_idx <- grep(pattern, gene_lookup_lines, fixed = TRUE)
 
-  if (length(gene_lines) == 0) {
+  if (length(match_idx) == 0) {
     stop(paste("ERROR: Gene name", GENE_NAME, "not found in GENCODE GTF"))
   }
 
+  gene_lines <- gene_lookup_lines[match_idx]
   gene_id <- sub('.*gene_id "([^"]+)".*', '\\1', gene_lines[1])
   gene_name_found <- sub('.*gene_name "([^"]+)".*', '\\1', gene_lines[1])
   GENE_NAME <- gene_name_found  # Use canonical GENCODE name for output files
@@ -555,15 +572,14 @@ if (SEARCH_BY == "name") {
 
 } else {
   message(paste("  Searching by Ensembl ID:", GENE_ID))
-  gene_lines <- system(
-    paste0("grep 'gene_id \"", GENE_ID, "' ", GENCODE_GENE_LOOKUP, " | grep -w gene | head -1"),
-    intern = TRUE
-  )
+  pattern <- paste0('gene_id "', GENE_ID)
+  match_idx <- grep(pattern, gene_lookup_lines, fixed = TRUE)
 
-  if (length(gene_lines) == 0) {
+  if (length(match_idx) == 0) {
     stop(paste("ERROR: Gene ID", GENE_ID, "not found in GENCODE GTF"))
   }
 
+  gene_lines <- gene_lookup_lines[match_idx][1]  # head -1 equivalent
   gene_id <- sub('.*gene_id "([^"]+)".*', '\\1', gene_lines[1])
   gene_name_found <- sub('.*gene_name "([^"]+)".*', '\\1', gene_lines[1])
 
@@ -1136,7 +1152,7 @@ if (OUTPUT_PROTEIN) {
         next
       }
 
-      translated <- translate_cds(tx_seq, coords$tx_start, coords$tx_end)
+      translated <- translate_cds(tx_seq, coords$tx_start, coords$tx_end, iso_id)
 
     } else if (iso_source == "SQANTI") {
       # Try SQANTI GTF CDS features first
@@ -1153,7 +1169,7 @@ if (OUTPUT_PROTEIN) {
             strand_char <- as.character(strand(tx_exons)[1])
             coords <- get_cds_transcript_coords(tx_exons, cds_feats, strand_char)
             if (!is.null(coords)) {
-              translated <- translate_cds(tx_seq, coords$tx_start, coords$tx_end)
+              translated <- translate_cds(tx_seq, coords$tx_start, coords$tx_end, iso_id)
             }
           }
         }

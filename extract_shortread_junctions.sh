@@ -86,7 +86,7 @@ done
 # ---- Validate dependencies ----
 if ! command -v samtools &>/dev/null; then
     echo "ERROR: samtools is required but not found in PATH"
-    echo "  Hint: conda activate /udd/repjc/.conda/envs/lr_igv"
+    echo "  Hint: install via 'conda install -c bioconda samtools' or activate the environment from environment.yml"
     exit 1
 fi
 
@@ -109,6 +109,13 @@ fi
 
 if [[ -n "$GENE" && -z "$GENCODE_GTF" ]]; then
     echo "ERROR: --gene requires --gencode-gtf"
+    exit 1
+fi
+
+# Validate gene identifier: letters, digits, period, hyphen, underscore only.
+# Rejects values that could inject regex metacharacters or shell syntax.
+if [[ -n "$GENE" && ! "$GENE" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "ERROR: --gene value must contain only letters, digits, '.', '-', or '_' (got: '$GENE')"
     exit 1
 fi
 
@@ -140,11 +147,11 @@ if [[ -n "$GENE" ]]; then
     if [[ "$GENCODE_GTF" == *.gz ]]; then
         GENE_LINE=$(zcat "$GENCODE_GTF" \
             | awk -F'\t' '$3 == "gene"' \
-            | grep "gene_name \"${GENE}\"" \
+            | grep -F "gene_name \"${GENE}\"" \
             | head -1)
     else
         GENE_LINE=$(awk -F'\t' '$3 == "gene"' "$GENCODE_GTF" \
-            | grep "gene_name \"${GENE}\"" \
+            | grep -F "gene_name \"${GENE}\"" \
             | head -1)
     fi
 

@@ -1,4 +1,47 @@
+# Analysis output directories
+runs/
+archive/
+data/
+igv_genome/
+
+# Per-gene output directories produced by extract_*.sh
+individual/
+merged/
+**/individual/
+**/merged/
+
+# Run outputs (match output file patterns anywhere in the tree)
+isoform_annotation_*.tsv
+isoform_annotation_*.gtf
+isoform_annotation_*.fasta
+protein_sequences_*.fasta
+gene_annotation.gtf
+igv_session.xml
+run_log.txt
+mtcl1_references.txt
+
+# Large reference files — download separately (see README)
+gencode_v49_genes.gtf
+
+# Binary / heavy artifacts
+*.bam
+*.bai
+*.rds
+*.html
+
+# Local config (tracked templates: config.example.*, config.cluster.*)
 config.R
 config.sh
-runs/
+
+# R session artifacts
+.Rhistory
+.RData
+.Rproj.user/
+
+# macOS
+.DS_Store
+
+# Editor / tooling
 .claude/
+.vscode/
+.idea/

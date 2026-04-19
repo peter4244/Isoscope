@@ -927,8 +927,38 @@ message("")
 # STEP 4: CALCULATE EXPRESSION (OPTIONAL)
 # =============================================================================
 
-# Combine GENCODE and SQANTI results
+# Combine GENCODE and long-read (SQANTI / ISOCALL) results.
+#
+# When SQANTI/ISOCALL classifies a long-read isoform as an exact
+# full-splice-match to a reference ENST, both the GENCODE parse and the
+# long-read parse emit a row for that ENST ID. That duplicates the
+# record and inflates any downstream counting that group-bys on
+# isoform_id (see https://github.com/peter4244/isoscope — reported by
+# isovar 2026-04-18).
+#
+# Fix: keep the GENCODE row for any ENST that also appears in the
+# long-read output (the GENCODE row has the richer reference annotation
+# — proper isoform_name, CDS, UTRs). Drop the duplicate long-read row.
+# Surface the long-read support via a new column `detected_in_longread`:
+# TRUE for every isoform the long-read caller saw, regardless of whether
+# the row's `source` is "GENCODE" (known-and-seen) or SQANTI/ISOCALL
+# (novel-only).
+sqanti_ids_seen <- if (nrow(sqanti_results) > 0)
+  unique(sqanti_results$isoform_id) else character(0)
+
+if (length(sqanti_ids_seen) > 0) {
+  dup_in_gencode <- gencode_results$isoform_id %in% sqanti_ids_seen
+  sqanti_keep <- !sqanti_results$isoform_id %in% gencode_results$isoform_id
+  sqanti_results <- sqanti_results[sqanti_keep, , drop = FALSE]
+} else {
+  dup_in_gencode <- logical(nrow(gencode_results))
+}
+
 all_isoforms <- rbind(gencode_results, sqanti_results)
+all_isoforms$detected_in_longread <- c(
+  dup_in_gencode,                      # TRUE for GENCODE rows also seen in LR
+  rep(TRUE, nrow(sqanti_results))      # TRUE for novel-only LR rows
+)
 
 if (INCLUDE_EXPRESSION) {
   message("====================================================================")
